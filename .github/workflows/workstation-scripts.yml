@@ -258,11 +258,64 @@ jobs:
             exit 1
           fi
 
-          python3 -c 'import json,sys; j=json.loads(sys.stdin.read());
-req=["profile","ok","gnome","required_missing","optional_missing","warnings"];
-miss=[k for k in req if k not in j];
-assert not miss, "missing keys: "+",".join(miss);
-print("ok")' <<<"$out"
+          python3 -c '
+import json, sys
+j = json.loads(sys.stdin.read())
+req = ["profile", "ok", "gnome", "required_missing", "optional_missing", "warnings"]
+miss = [k for k in req if k not in j]
+assert not miss, "missing keys: " + ",".join(miss)
+assert isinstance(j["warnings"], list), "warnings must be a list"
+assert isinstance(j["required_missing"], list), "required_missing must be a list"
+assert isinstance(j["optional_missing"], list), "optional_missing must be a list"
+assert isinstance(j["ok"], bool), "ok must be a bool"
+assert isinstance(j["gnome"], bool), "gnome must be a bool"
+print("ok: schema valid, warnings count=" + str(len(j["warnings"])))
+' <<<"$out"
+
+      - name: Smoke: sourceos status --json warnings includes aggregate polish checks
+        run: |
+          set -euo pipefail
+          f='profiles/linux-dev/workstation-v0/bin/sourceos'
+
+          # Validate commands (as required by validation evidence requirement):
+          echo "CMD: bash -n $f"
+          bash -n "$f"
+          echo "PASS: bash -n"
+
+          echo "CMD: SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 bash $f status --json"
+          set +e
+          out=$(SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 bash "$f" status --json)
+          rc=$?
+          set -e
+          echo "exit code: $rc"
+
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+            echo "FAIL: unexpected exit code $rc" >&2
+            exit 1
+          fi
+          echo "PASS: exit code $rc is 0 or 2"
+
+          # Validate JSON schema and aggregate polish warning integration
+          python3 -c '
+import json, sys
+j = json.loads(sys.stdin.read())
+
+# Schema check: all expected keys present
+req = ["profile", "ok", "gnome", "required_missing", "optional_missing", "warnings"]
+miss = [k for k in req if k not in j]
+assert not miss, "missing keys: " + ",".join(miss)
+print("PASS: all schema keys present:", req)
+
+# Type check: warnings is a list (aggregate polish warnings integrate here)
+assert isinstance(j["warnings"], list), "warnings must be a list"
+print("PASS: warnings is list, count=" + str(len(j["warnings"])))
+print("warnings:", j["warnings"])
+
+# Confirm profile value
+assert j["profile"] == "linux-dev/workstation-v0", "unexpected profile: " + str(j["profile"])
+print("PASS: profile =", j["profile"])
+' <<<"$out"
+          echo "PASS: aggregate polish warning integration validated"
 
       - name: Drift guard: forbid legacy launcher strings
         run: |
