@@ -13,6 +13,10 @@
 #   SOURCEOS_HOST             NixOS host target  (default: builder-aarch64)
 
 set -euo pipefail
+# All files created by this script default to owner-only permissions.
+# Explicit chmod 600/700 calls remain as documented intent, but umask is the
+# first line of defence against a window where a secret file is world-readable.
+umask 077
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -202,7 +206,8 @@ else
 fi
 AGE_PUBKEY=$(age-keygen -y "${AGE_KEY}")
 [[ -n "${AGE_PUBKEY}" ]] || die "age-keygen produced empty public key from ${AGE_KEY} — key file may be corrupt"
-echo "${AGE_PUBKEY}" > "${AGE_PUB}"
+# Atomic write — consistent with all other file writes in this script.
+printf '%s\n' "${AGE_PUBKEY}" > "${AGE_PUB}.tmp" && mv "${AGE_PUB}.tmp" "${AGE_PUB}"
 info "Public key: ${AGE_PUBKEY}"
 
 # If secrets.yaml already exists, verify it is decryptable with the current key.
@@ -240,10 +245,12 @@ if [[ ! -f "${COMPOSE_ENV}" ]]; then
 
     [[ -f "${COMPOSE_ENV_EXAMPLE}" ]] || \
         die "Missing ${COMPOSE_ENV_EXAMPLE} — prophet-platform clone may be incomplete or the compose layout changed"
-    cp "${COMPOSE_ENV_EXAMPLE}" "${COMPOSE_ENV}"
+    # install -m 600 is atomic: creates the file with correct permissions in one
+    # syscall. A plain `cp` followed by `chmod 600` leaves a window where the
+    # file (containing plaintext passwords) is world-readable.
+    install -m 600 "${COMPOSE_ENV_EXAMPLE}" "${COMPOSE_ENV}"
     sed -i "s|^FOREMAN_ADMIN_PASSWORD=.*|FOREMAN_ADMIN_PASSWORD=${FOREMAN_ADMIN_PASSWORD}|" "${COMPOSE_ENV}"
     sed -i "s|^KATELLO_PG_PASSWORD=.*|KATELLO_PG_PASSWORD=${KATELLO_PG_PASSWORD}|" "${COMPOSE_ENV}"
-    chmod 600 "${COMPOSE_ENV}"
 
     echo "${FOREMAN_ADMIN_PASSWORD}" > "${KATELLO_ADMIN_PW_FILE}"
     chmod 600 "${KATELLO_ADMIN_PW_FILE}"
@@ -267,7 +274,7 @@ _KATELLO_RUNNING=$(docker ps --filter "name=katello" --format "{{.Names}}" 2>/de
     Diagnose: docker compose -f ${COMPOSE_FILE} logs
     Then retry: sudo bash scripts/enroll.sh"
 info "Containers started (${_KATELLO_RUNNING} katello container(s) running). Waiting for foreman-installer (10-15 min)..."
-info "Follow: docker compose -f ${COMPOSE_FILE} logs -f foreman-katello"
+info "Follow: docker-compose -f ${COMPOSE_FILE} logs -f foreman-katello"
 
 MAX_WAIT="${FOREMAN_WAIT_TIMEOUT:-1800}"; ELAPSED=0; INTERVAL=15
 while ! docker exec katello-foreman test -f /var/lib/foreman/.sourceos-initialized 2>/dev/null; do
@@ -366,6 +373,7 @@ info "harmonia public key: ${HARMONIA_PUBKEY}"
 
 step 8 "minisign key pair and nix-cache-info signature"
 
+rm -f "${MINISIGN_CACHE_INFO}.tmp"  # clean up stale temp from a previous interrupted run
 require_cmd minisign
 
 if [[ -f "${MINISIGN_PUB}" && -f "${MINISIGN_SEC}" ]]; then
@@ -405,6 +413,7 @@ ok "Signed nix-cache-info → ${MINISIGN_CACHE_INFO_SIG} ($(elapsed))"
 
 step 9 "Write enroll.nix (device-specific NixOS settings)"
 
+rm -f "${ENROLL_NIX}.tmp"  # clean up stale temp from a previous interrupted run
 write_enroll_nix "${SIGNING_PUBKEY}" "${HARMONIA_PUBKEY}"
 ok "enroll.nix written — no Nix file patching needed ($(elapsed))"
 
@@ -467,12 +476,12 @@ for _i in $(seq 1 12); do
     sleep 5
 done
 if [[ $_HARM_UP -eq 1 ]]; then
-    nix copy --to "http://127.0.0.1:8101" "${CLOSURE}" && \
+    nix copy --to "http://127.0.0.1:8101?compression=zstd" "${CLOSURE}" && \
         ok "Closure pushed to harmonia cache" || \
-        warn "nix copy failed — run manually: nix copy --to 'http://127.0.0.1:8101' ${CLOSURE}"
+        warn "nix copy failed — run manually: nix copy --to 'http://127.0.0.1:8101?compression=zstd' ${CLOSURE}"
 else
     warn "harmonia not responding on :8101 after 60s — push manually after it starts"
-    warn "  nix copy --to 'http://127.0.0.1:8101' ${CLOSURE}"
+    warn "  nix copy --to 'http://127.0.0.1:8101?compression=zstd' ${CLOSURE}"
 fi
 
 # Promote content view to stable so sourceos-syncd can pick it up
@@ -503,13 +512,21 @@ fi
 
 step 12 "Verify enrollment"
 
-sleep 10  # let sourceos-syncd start up
-
+# Poll for sourceos-syncd to become active (up to 30s) rather than a blind sleep.
+# On a fast path (cached build) the service may be active within seconds; on a
+# slow path it can take longer. A fixed sleep either wastes time or races.
 HEALTHY=1
-if systemctl is-active --quiet sourceos-syncd 2>/dev/null; then
+_SYNCD_UP=0
+for _i in $(seq 1 6); do
+    if systemctl is-active --quiet sourceos-syncd 2>/dev/null; then
+        _SYNCD_UP=1; break
+    fi
+    sleep 5
+done
+if [[ $_SYNCD_UP -eq 1 ]]; then
     ok "sourceos-syncd: active"
 else
-    warn "sourceos-syncd not active yet (may still be starting)"
+    warn "sourceos-syncd not active after 30s (may still be starting)"
     HEALTHY=0
 fi
 
@@ -528,6 +545,8 @@ if systemctl is-active --quiet nginx 2>/dev/null; then
     # Cryptographically verify the minisig, not just that the endpoint responds.
     # A stale or wrong-key sig would pass an existence check but fail here.
     _SIG_TMP=$(mktemp /tmp/nix-cache-info-XXXXX.minisig)
+    # Trap ensures cleanup even if set -e fires inside this block.
+    trap "rm -f ${_SIG_TMP}" EXIT
     if curl -fsSk http://127.0.0.1:8101/nix-cache-info.minisig -o "${_SIG_TMP}" 2>/dev/null && \
        [[ -s "${_SIG_TMP}" ]]; then
         if minisign -V -p "${MINISIGN_PUB}" -m "${MINISIGN_CACHE_INFO}" -x "${_SIG_TMP}" &>/dev/null; then
@@ -541,7 +560,7 @@ if systemctl is-active --quiet nginx 2>/dev/null; then
         warn "minisig not yet at /nix-cache-info.minisig — check nginx + ${MINISIGN_CACHE_INFO_SIG}"
         HEALTHY=0
     fi
-    rm -f "${_SIG_TMP}"
+    rm -f "${_SIG_TMP}"; trap - EXIT
 fi
 
 if [[ $HEALTHY -eq 1 ]]; then
