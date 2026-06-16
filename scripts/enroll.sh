@@ -135,6 +135,9 @@ step 0 "Preflight checks"
 [[ $EUID -eq 0 ]]              || die "Run as root: sudo bash scripts/enroll.sh"
 [[ -d /nix ]]                  || die "Not a NixOS system (/nix not found)"
 [[ -f "${REPO_ROOT}/flake.nix" ]] || die "flake.nix not found — set SOURCEOS_REPO_ROOT"
+[[ -d "${REPO_ROOT}/hosts/${HOST}" ]] || \
+    die "Host directory not found: ${REPO_ROOT}/hosts/${HOST}
+    Set SOURCEOS_HOST to a valid host. Available: $(ls "${REPO_ROOT}/hosts/" 2>/dev/null | tr '\n' ' ')"
 
 # Disk space: require at least 100 GB free on the partition holding the repo
 DISK_FREE_KB=$(df -k "${REPO_ROOT}" | awk 'NR==2 {print $4}')
@@ -270,9 +273,11 @@ if [[ ! -f "${COMPOSE_ENV}" ]]; then
         die "KATELLO_PG_PASSWORD key missing from ${COMPOSE_ENV_EXAMPLE} — template may have changed"
     sed -i "s|^FOREMAN_ADMIN_PASSWORD=.*|FOREMAN_ADMIN_PASSWORD=${FOREMAN_ADMIN_PASSWORD}|" "${COMPOSE_ENV}"
     sed -i "s|^KATELLO_PG_PASSWORD=.*|KATELLO_PG_PASSWORD=${KATELLO_PG_PASSWORD}|" "${COMPOSE_ENV}"
-    # Confirm the substitution actually landed — paranoia against sed edge cases.
+    # Confirm both substitutions actually landed — paranoia against sed edge cases.
     grep -q "^FOREMAN_ADMIN_PASSWORD=${FOREMAN_ADMIN_PASSWORD}" "${COMPOSE_ENV}" || \
         die "sed failed to set FOREMAN_ADMIN_PASSWORD in ${COMPOSE_ENV}"
+    grep -q "^KATELLO_PG_PASSWORD=${KATELLO_PG_PASSWORD}" "${COMPOSE_ENV}" || \
+        die "sed failed to set KATELLO_PG_PASSWORD in ${COMPOSE_ENV}"
 
     # Atomic write: if the script is killed mid-write the file stays absent
     # rather than being empty, so a re-run regenerates it rather than reading
@@ -472,13 +477,19 @@ BUILD_LOG="/tmp/sourceos-enroll-nix-build-$(date +%s).log"
 info "Build log: ${BUILD_LOG}  (tail -f ${BUILD_LOG} in another terminal to follow)"
 # head -1 guards against multi-output derivations: --print-out-paths prints one
 # path per output; command substitution would embed a newline making -e fail.
+# set +e/set -e mirrors the nixos-rebuild pattern: with set -euo pipefail,
+# var=$(failing_pipeline) fires set -e before the guard below can print BUILD_LOG.
+set +e
 CLOSURE=$(nix build "${REPO_ROOT}#nixosConfigurations.${HOST}.config.system.build.toplevel" \
     --no-link --print-out-paths 2>"${BUILD_LOG}" | head -1)
+NIX_BUILD_EXIT=${PIPESTATUS[0]}
+set -e
+[[ $NIX_BUILD_EXIT -eq 0 ]] || die "nix build failed (exit ${NIX_BUILD_EXIT}). Build log: ${BUILD_LOG}
+    For full trace: nix build ${REPO_ROOT}#nixosConfigurations.${HOST}.config.system.build.toplevel --no-link --show-trace"
 # nix build emits errors only to stderr (captured to BUILD_LOG above).
 # Verify stdout produced a non-empty, existing store path.
 [[ -n "${CLOSURE}" && -e "${CLOSURE}" ]] || \
-    die "nix build failed. Build log: ${BUILD_LOG}
-    For full trace: nix build ${REPO_ROOT}#nixosConfigurations.${HOST}.config.system.build.toplevel --no-link --show-trace"
+    die "nix build exited 0 but produced no valid store path — unexpected; check: ${BUILD_LOG}"
 ok "Built: ${CLOSURE}"
 
 # Harmonia must be running before we can push (it starts after pass-2 rebuild).
@@ -504,9 +515,12 @@ ok "Pass 2 complete ($(elapsed)) — log: ${PASS2_LOG}"
 
 # Confirm the activated generation matches the closure we built in step 10.
 CURRENT_GEN=$(readlink /run/current-system 2>/dev/null || echo "")
-if [[ -n "${CURRENT_GEN}" && "${CURRENT_GEN}" == "${CLOSURE}" ]]; then
+if [[ -z "${CURRENT_GEN}" ]]; then
+    warn "/run/current-system not readable — pass-2 activation may have failed"
+    warn "  Check: nixos-rebuild list-generations"
+elif [[ "${CURRENT_GEN}" == "${CLOSURE}" ]]; then
     ok "Active generation matches built closure"
-elif [[ -n "${CURRENT_GEN}" ]]; then
+else
     info "Active generation: ${CURRENT_GEN}"
     info "Built closure:     ${CLOSURE}"
     warn "Active generation differs from step-10 closure — check: nixos-rebuild list-generations"
@@ -630,6 +644,8 @@ if systemctl is-active --quiet harmonia 2>/dev/null; then
     ok "harmonia: active"
 else
     warn "harmonia not active yet"
+    warn "  Diagnose: journalctl -u harmonia | tail -20"
+    warn "  Start:    systemctl start harmonia"
     HEALTHY=0
 fi
 
@@ -637,6 +653,10 @@ if systemctl is-active --quiet nginx 2>/dev/null; then
     ok "nginx (nix-cache proxy): active"
     if curl -fsSk http://127.0.0.1:8101/nix-cache-info &>/dev/null; then
         ok "Nix cache at http://127.0.0.1:8101 responding"
+    else
+        warn "Nix cache at http://127.0.0.1:8101 not responding — is harmonia running?"
+        warn "  Check: systemctl status harmonia"
+        HEALTHY=0
     fi
     # Cryptographically verify the minisig, not just that the endpoint responds.
     # A stale or wrong-key sig would pass an existence check but fail here.
@@ -657,6 +677,11 @@ if systemctl is-active --quiet nginx 2>/dev/null; then
         HEALTHY=0
     fi
     rm -f "${_SIG_TMP}"; trap - EXIT
+else
+    warn "nginx (nix-cache proxy): not active — minisig verification skipped"
+    warn "  Diagnose: journalctl -u nginx | tail -20"
+    warn "  Start:    systemctl start nginx"
+    HEALTHY=0
 fi
 
 if [[ $HEALTHY -eq 1 ]]; then
