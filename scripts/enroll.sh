@@ -123,11 +123,22 @@ step 0 "Preflight checks"
 [[ -d /nix ]]                  || die "Not a NixOS system (/nix not found)"
 [[ -f "${REPO_ROOT}/flake.nix" ]] || die "flake.nix not found — set SOURCEOS_REPO_ROOT"
 
+# Disk space: require at least 100 GB free on the partition holding the repo
+DISK_FREE_KB=$(df -k "${REPO_ROOT}" | awk 'NR==2 {print $4}')
+DISK_FREE_GB=$(( DISK_FREE_KB / 1024 / 1024 ))
+[[ $DISK_FREE_GB -ge 100 ]] || \
+    die "Insufficient disk space: ${DISK_FREE_GB} GB free, 100 GB required"
+
+# Network connectivity
+curl -fsSL --max-time 10 https://api.github.com >/dev/null 2>&1 || \
+    die "No network or GitHub unreachable — enrollment requires internet access"
+
 mkdir -p "${SOURCEOS_DIR}" && chmod 700 "${SOURCEOS_DIR}"
 
 info "Repo root:   ${REPO_ROOT}"
 info "Host target: ${HOST}"
 info "Katello org: ${ORG}"
+info "Disk free:   ${DISK_FREE_GB} GB"
 ok   "Preflight passed ($(elapsed))"
 
 # ── Step 1: hardware-configuration.nix ───────────────────────────────────────
@@ -149,9 +160,19 @@ step 2 "nixos-rebuild switch — pass 1 (installs Docker, age, sops, minisign)"
 # and therefore not copied into the Nix store. --impure lets Nix access them
 # from the working directory via builtins.pathExists and direct import.
 info "Building... (5-15 min on first run, downloads packages)"
+PASS1_LOG="/tmp/sourceos-enroll-pass1-$(date +%s).log"
 nixos-rebuild switch --flake "${REPO_ROOT}#${HOST}" --impure 2>&1 | \
-    grep -E '^(building|fetching|error|warning|activating)' || true
-ok "Pass 1 complete ($(elapsed))"
+    tee "${PASS1_LOG}" | \
+    grep -E '(building|fetching|error|warning|Error|FAILED|activating)' || true
+# Check exit code of nixos-rebuild (not the grep)
+if ! grep -q 'activating' "${PASS1_LOG}" 2>/dev/null; then
+    # activating line may be absent on cached builds; check for explicit failure
+    if grep -qiE '(error:|FAILED|failed to)' "${PASS1_LOG}" 2>/dev/null; then
+        die "Pass 1 rebuild failed. Full log: ${PASS1_LOG}
+    Check: journalctl -xe | tail -50"
+    fi
+fi
+ok "Pass 1 complete ($(elapsed)) — log: ${PASS1_LOG}"
 
 # ── Step 3: Age key ───────────────────────────────────────────────────────────
 
@@ -170,6 +191,18 @@ AGE_PUBKEY=$(age-keygen -y "${AGE_KEY}")
 echo "${AGE_PUBKEY}" > "${AGE_PUB}"
 info "Public key: ${AGE_PUBKEY}"
 
+# If secrets.yaml already exists, verify it is decryptable with the current key.
+# A mismatch means the age key changed (e.g. disk copy or manual deletion) and
+# the old ciphertext can never be recovered — catch it now, not at boot.
+if [[ -f "${SECRETS_YAML}" ]]; then
+    SOPS_AGE_KEY_FILE="${AGE_KEY}" sops -d "${SECRETS_YAML}" >/dev/null 2>&1 || \
+        die "secrets.yaml exists but CANNOT be decrypted with the current age key.
+    This means the age key was replaced after secrets were encrypted.
+    To re-enroll: rm -f ${SECRETS_YAML} ${AGE_KEY} ${AGE_PUB}
+    Then re-run: sudo bash scripts/enroll.sh"
+    info "secrets.yaml verified decryptable with current age key"
+fi
+
 # ── Step 4: Foreman+Katello ───────────────────────────────────────────────────
 
 step 4 "Foreman+Katello (docker compose up)"
@@ -179,8 +212,11 @@ require_cmd docker-compose
 
 if [[ ! -d "${PROPHET_PLATFORM_ROOT}" ]]; then
     info "Cloning prophet-platform..."
-    git clone git@github.com:SocioProphet/prophet-platform.git "${PROPHET_PLATFORM_ROOT}" || \
-        git clone https://github.com/SocioProphet/prophet-platform.git "${PROPHET_PLATFORM_ROOT}"
+    mkdir -p "$(dirname "${PROPHET_PLATFORM_ROOT}")" || \
+        die "Cannot create $(dirname "${PROPHET_PLATFORM_ROOT}") — check disk and permissions"
+    git clone git@github.com:SocioProphet/prophet-platform.git "${PROPHET_PLATFORM_ROOT}" 2>/dev/null || \
+        git clone https://github.com/SocioProphet/prophet-platform.git "${PROPHET_PLATFORM_ROOT}" || \
+        die "Failed to clone prophet-platform. Check network and GitHub access (SSH key or HTTPS)."
 fi
 
 if [[ ! -f "${COMPOSE_ENV}" ]]; then
@@ -206,12 +242,19 @@ docker-compose -f "${COMPOSE_FILE}" --env-file "${COMPOSE_ENV}" up -d
 info "Containers started. Waiting for foreman-installer (10-15 min)..."
 info "Follow: docker compose -f ${COMPOSE_FILE} logs -f foreman-katello"
 
-MAX_WAIT=1200; ELAPSED=0; INTERVAL=15
+MAX_WAIT="${FOREMAN_WAIT_TIMEOUT:-1800}"; ELAPSED=0; INTERVAL=15
 while ! docker exec katello-foreman test -f /var/lib/foreman/.sourceos-initialized 2>/dev/null; do
     sleep $INTERVAL; ELAPSED=$((ELAPSED + INTERVAL))
-    [[ $ELAPSED -ge $MAX_WAIT ]] && \
-        die "Foreman installer timed out after ${MAX_WAIT}s. Check logs above."
-    [[ $((ELAPSED % 60)) -eq 0 ]] && info "  foreman-installer running (${ELAPSED}s)..."
+    if [[ $ELAPSED -ge $MAX_WAIT ]]; then
+        echo
+        warn "Foreman installer still running after ${MAX_WAIT}s."
+        warn "Options:"
+        warn "  Watch:   docker exec katello-foreman tail -f /var/log/foreman-installer/foreman-installer.log"
+        warn "  Restart: docker compose -f ${COMPOSE_FILE} restart foreman-katello"
+        warn "  Re-run:  bash scripts/enroll.sh  (will skip Foreman if already complete)"
+        die  "Timed out. Increase timeout: FOREMAN_WAIT_TIMEOUT=3600 bash scripts/enroll.sh"
+    fi
+    [[ $((ELAPSED % 60)) -eq 0 ]] && info "  foreman-installer running (${ELAPSED}s / ${MAX_WAIT}s)..."
 done
 
 wait_for_url "${KATELLO_URL}/api/v2/status" "Foreman API" 120
@@ -265,6 +308,13 @@ step 7 "harmonia binary cache signing key"
 
 if [[ -f "${HARMONIA_KEY}" && -f "${HARMONIA_PUB}" ]]; then
     ok "harmonia signing key already exists"
+elif [[ -f "${HARMONIA_KEY}" || -f "${HARMONIA_PUB}" ]]; then
+    # Partial state: one file exists but not the other. Regenerating would produce
+    # a new key that orphans any packages signed with the old key. Fail loudly.
+    die "Partial harmonia key state detected (one of key/pub missing).
+    Delete both and re-run:
+      rm -f ${HARMONIA_KEY} ${HARMONIA_PUB}
+      sudo bash scripts/enroll.sh"
 else
     # nix-store --generate-binary-cache-key <name> <secret-key-file> <public-key-file>
     nix-store --generate-binary-cache-key "builder-aarch64-1" "${HARMONIA_KEY}" "${HARMONIA_PUB}"
@@ -283,9 +333,14 @@ require_cmd minisign
 
 if [[ -f "${MINISIGN_PUB}" && -f "${MINISIGN_SEC}" ]]; then
     ok "minisign key pair already exists"
+elif [[ -f "${MINISIGN_PUB}" || -f "${MINISIGN_SEC}" ]]; then
+    die "Partial minisign key state detected (one of pub/sec missing).
+    Delete both and re-run:
+      rm -f ${MINISIGN_PUB} ${MINISIGN_SEC}
+      sudo bash scripts/enroll.sh"
 else
-    info "Generating minisign key pair (press Enter for empty passphrase)..."
-    minisign -G -p "${MINISIGN_PUB}" -s "${MINISIGN_SEC}"
+    info "Generating minisign key pair (no passphrase — press Enter twice if prompted)..."
+    minisign -G -p "${MINISIGN_PUB}" -s "${MINISIGN_SEC}" -W
     chmod 600 "${MINISIGN_SEC}"
     ok "Generated ${MINISIGN_PUB} ($(elapsed))"
 fi
@@ -330,9 +385,16 @@ info "Closure push to harmonia will happen after pass-2 rebuild in step 11."
 step 11 "nixos-rebuild switch — pass 2 (live config: secrets, signing key, harmonia)"
 
 info "Activating final configuration..."
+PASS2_LOG="/tmp/sourceos-enroll-pass2-$(date +%s).log"
 nixos-rebuild switch --flake "${REPO_ROOT}#${HOST}" --impure 2>&1 | \
-    grep -E '^(building|fetching|error|warning|activating)' || true
-ok "Pass 2 complete ($(elapsed))"
+    tee "${PASS2_LOG}" | \
+    grep -E '(building|fetching|error|warning|Error|FAILED|activating)' || true
+if grep -qiE '(error:|FAILED|failed to)' "${PASS2_LOG}" 2>/dev/null; then
+    die "Pass 2 rebuild failed. Full log: ${PASS2_LOG}
+    Check: journalctl -xe | tail -50
+    The previous generation (pass 1) is still bootable."
+fi
+ok "Pass 2 complete ($(elapsed)) — log: ${PASS2_LOG}"
 
 # Now push the closure to the running harmonia cache
 info "Pushing NixOS closure to local harmonia cache (http://127.0.0.1:8101)..."

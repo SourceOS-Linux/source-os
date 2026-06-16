@@ -145,6 +145,13 @@ in
       wants = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
 
+      # Don't start until the password file exists. On pass-1 (pre-enrollment)
+      # the sops-decrypted secret isn't present yet; ConditionPathExists keeps
+      # the service inert rather than spam-restarting with a credential error.
+      unitConfig = lib.mkIf (cfg.katelloPasswordFile != "") {
+        ConditionPathExists = cfg.katelloPasswordFile;
+      };
+
       serviceConfig = {
         Type = "simple";
         User = "sourceos-syncd";

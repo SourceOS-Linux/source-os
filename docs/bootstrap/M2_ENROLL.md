@@ -49,10 +49,20 @@ sudo -i
 curl -L https://raw.githubusercontent.com/elitak/nixos-infect/master/nixos-infect | \
   NIX_CHANNEL=nixos-unstable NO_REBOOT=1 bash 2>&1 | tee /tmp/nixos-infect.log
 
-# Clone source-os before rebooting into NixOS
-mkdir -p /opt/sourceos
-git clone git@github.com:SociOS-Linux/source-os.git /opt/sourceos/source-os
+# Verify nixos-infect completed successfully before continuing
+grep -q 'configuration changed' /tmp/nixos-infect.log || \
+  { echo "nixos-infect may have failed — check /tmp/nixos-infect.log before rebooting"; exit 1; }
 
+# Clone source-os before rebooting into NixOS.
+# CRITICAL: do not reboot until this succeeds. If the clone fails, fix the
+# issue (SSH key, network) and retry. Rebooting without the repo leaves you
+# with a NixOS system you can't enroll without network recovery.
+mkdir -p /opt/sourceos
+git clone git@github.com:SociOS-Linux/source-os.git /opt/sourceos/source-os || \
+  git clone https://github.com/SociOS-Linux/source-os.git /opt/sourceos/source-os || \
+  { echo "FATAL: git clone failed. Fix network/SSH access before rebooting."; exit 1; }
+
+echo "Clone successful — safe to reboot."
 reboot
 ```
 
@@ -238,3 +248,34 @@ sudo bash scripts/enroll.sh
 ```
 
 If the age key or signing keys need to be regenerated (e.g., disk wipe), delete `/etc/sourceos/` and re-run. The SOPS secrets will be re-encrypted with the new age key.
+
+### `secrets.yaml cannot be decrypted with current age key`
+
+The age key changed after secrets were encrypted (e.g., manual deletion + re-run). The old ciphertext is unrecoverable. Delete and re-enroll:
+
+```sh
+rm -f /etc/sourceos/secrets.yaml /etc/sourceos/age.key /etc/sourceos/age.pub
+sudo bash scripts/enroll.sh
+```
+
+### `Partial harmonia/minisign key state detected`
+
+One file of a key pair was deleted. The script refuses to regenerate silently to avoid orphaning cache signatures. Delete the entire pair and re-run:
+
+```sh
+rm -f /etc/sourceos/harmonia-signing.key /etc/sourceos/harmonia-signing.pub
+rm -f /etc/sourceos/nix-cache.pub /etc/sourceos/nix-cache.sec
+sudo bash scripts/enroll.sh
+```
+
+### Pass 1 or pass 2 rebuild failed
+
+If `nixos-rebuild switch` fails during enrollment, the previous generation remains bootable. Check the log printed by the script and inspect:
+
+```sh
+journalctl -xe | tail -80
+# or replay the log file path printed by the script
+cat /tmp/sourceos-enroll-pass1-*.log
+```
+
+The system can always boot into the previous generation via the systemd-boot menu.

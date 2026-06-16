@@ -122,6 +122,12 @@
   # ── SOPS secrets ────────────────────────────────────────────────────────────
   # Stored at /etc/sourceos/secrets.yaml (NOT in the repo).
   # Generated and SOPS-encrypted by enroll.sh using the device age key.
+  #
+  # validateSopsFiles = false: prevents sops-nix from failing activation on
+  # pass-1 nixos-rebuild (before age.key and secrets.yaml exist). The secrets
+  # service runs at boot; if the files are missing it fails gracefully and
+  # sourceos-syncd is gated by ConditionPathExists so it won't start either.
+  sops.validateSopsFiles = false;
   sops.age.keyFile = "/etc/sourceos/age.key";
   sops.secrets.katello-password = {
     sopsFile = "/etc/sourceos/secrets.yaml";
