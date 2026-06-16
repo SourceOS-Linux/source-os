@@ -163,15 +163,14 @@ info "Building... (5-15 min on first run, downloads packages)"
 PASS1_LOG="/tmp/sourceos-enroll-pass1-$(date +%s).log"
 nixos-rebuild switch --flake "${REPO_ROOT}#${HOST}" --impure 2>&1 | \
     tee "${PASS1_LOG}" | \
-    grep -E '(building|fetching|error|warning|Error|FAILED|activating)' || true
-# Check exit code of nixos-rebuild (not the grep)
-if ! grep -q 'activating' "${PASS1_LOG}" 2>/dev/null; then
-    # activating line may be absent on cached builds; check for explicit failure
-    if grep -qiE '(error:|FAILED|failed to)' "${PASS1_LOG}" 2>/dev/null; then
-        die "Pass 1 rebuild failed. Full log: ${PASS1_LOG}
+    grep --line-buffered -E '(building|fetching|error|warning|Error|FAILED|activating)' || true
+# Capture nixos-rebuild exit code from PIPESTATUS[0] before any other command resets it.
+# The `|| true` on the grep does NOT reset PIPESTATUS — it only applies to the grep's own
+# exit, not to the pipeline. This is the reliable way to detect nixos-rebuild failure
+# without relying on fragile log-pattern matching.
+NB1_EXIT=${PIPESTATUS[0]}
+[[ $NB1_EXIT -eq 0 ]] || die "Pass 1 rebuild failed (exit ${NB1_EXIT}). Full log: ${PASS1_LOG}
     Check: journalctl -xe | tail -50"
-    fi
-fi
 ok "Pass 1 complete ($(elapsed)) — log: ${PASS1_LOG}"
 
 # ── Step 3: Age key ───────────────────────────────────────────────────────────
@@ -373,7 +372,12 @@ step 10 "Build NixOS closure + push to harmonia cache"
 
 info "Building builder-aarch64 system closure..."
 CLOSURE=$(nix build "${REPO_ROOT}#nixosConfigurations.${HOST}.config.system.build.toplevel" \
-    --no-link --print-out-paths 2>&1 | tail -1)
+    --no-link --print-out-paths 2>/dev/null)
+# nix build returns empty stdout on failure (errors go to stderr). Verify both that
+# CLOSURE is non-empty and that the path actually exists in the Nix store.
+[[ -n "${CLOSURE}" && -e "${CLOSURE}" ]] || \
+    die "nix build failed — retry with:
+    nix build ${REPO_ROOT}#nixosConfigurations.${HOST}.config.system.build.toplevel --no-link --show-trace"
 ok "Built: ${CLOSURE}"
 
 # Harmonia must be running before we can push (it starts after pass-2 rebuild).
@@ -388,23 +392,41 @@ info "Activating final configuration..."
 PASS2_LOG="/tmp/sourceos-enroll-pass2-$(date +%s).log"
 nixos-rebuild switch --flake "${REPO_ROOT}#${HOST}" --impure 2>&1 | \
     tee "${PASS2_LOG}" | \
-    grep -E '(building|fetching|error|warning|Error|FAILED|activating)' || true
-if grep -qiE '(error:|FAILED|failed to)' "${PASS2_LOG}" 2>/dev/null; then
-    die "Pass 2 rebuild failed. Full log: ${PASS2_LOG}
+    grep --line-buffered -E '(building|fetching|error|warning|Error|FAILED|activating)' || true
+NB2_EXIT=${PIPESTATUS[0]}
+[[ $NB2_EXIT -eq 0 ]] || die "Pass 2 rebuild failed (exit ${NB2_EXIT}). Full log: ${PASS2_LOG}
     Check: journalctl -xe | tail -50
-    The previous generation (pass 1) is still bootable."
-fi
+    The previous generation (pass 1) is still bootable via the systemd-boot menu."
 ok "Pass 2 complete ($(elapsed)) — log: ${PASS2_LOG}"
 
-# Now push the closure to the running harmonia cache
+# Confirm the activated generation matches the closure we built in step 10.
+CURRENT_GEN=$(readlink /run/current-system 2>/dev/null || echo "")
+if [[ -n "${CURRENT_GEN}" && "${CURRENT_GEN}" == "${CLOSURE}" ]]; then
+    ok "Active generation matches built closure"
+elif [[ -n "${CURRENT_GEN}" ]]; then
+    info "Active generation: ${CURRENT_GEN}"
+    info "Built closure:     ${CLOSURE}"
+    warn "Active generation differs from step-10 closure — check: nixos-rebuild list-generations"
+fi
+
+# Now push the closure to the running harmonia cache.
+# Wait up to 60s for harmonia (it starts during pass-2 activation); this is
+# warn-only — a push failure does not block enrollment. sourceos-syncd will
+# repopulate the cache on its first sync cycle.
 info "Pushing NixOS closure to local harmonia cache (http://127.0.0.1:8101)..."
-sleep 3  # brief pause for harmonia to finish starting
-if curl -fsSk http://127.0.0.1:8101/nix-cache-info &>/dev/null; then
+_HARM_UP=0
+for _i in $(seq 1 12); do
+    if curl -fsSk --max-time 5 "http://127.0.0.1:8101/nix-cache-info" &>/dev/null; then
+        _HARM_UP=1; break
+    fi
+    sleep 5
+done
+if [[ $_HARM_UP -eq 1 ]]; then
     nix copy --to "http://127.0.0.1:8101" "${CLOSURE}" && \
         ok "Closure pushed to harmonia cache" || \
         warn "nix copy failed — run manually: nix copy --to 'http://127.0.0.1:8101' ${CLOSURE}"
 else
-    warn "harmonia not yet responding on :8101 — push manually after it starts"
+    warn "harmonia not responding on :8101 after 60s — push manually after it starts"
     warn "  nix copy --to 'http://127.0.0.1:8101' ${CLOSURE}"
 fi
 
@@ -458,11 +480,23 @@ if systemctl is-active --quiet nginx 2>/dev/null; then
     if curl -fsSk http://127.0.0.1:8101/nix-cache-info &>/dev/null; then
         ok "Nix cache at http://127.0.0.1:8101 responding"
     fi
-    if curl -fsSk http://127.0.0.1:8101/nix-cache-info.minisig &>/dev/null; then
-        ok "minisig endpoint serving correctly"
+    # Cryptographically verify the minisig, not just that the endpoint responds.
+    # A stale or wrong-key sig would pass an existence check but fail here.
+    _SIG_TMP=$(mktemp /tmp/nix-cache-info-XXXXX.minisig)
+    if curl -fsSk http://127.0.0.1:8101/nix-cache-info.minisig -o "${_SIG_TMP}" 2>/dev/null && \
+       [[ -s "${_SIG_TMP}" ]]; then
+        if minisign -V -p "${MINISIGN_PUB}" -m "${MINISIGN_CACHE_INFO}" -x "${_SIG_TMP}" &>/dev/null; then
+            ok "nix-cache-info minisig: signature valid"
+        else
+            warn "minisig served but signature is INVALID — re-sign:"
+            warn "  minisign -S -s ${MINISIGN_SEC} -m ${MINISIGN_CACHE_INFO} -x ${MINISIGN_CACHE_INFO_SIG}"
+            HEALTHY=0
+        fi
     else
         warn "minisig not yet at /nix-cache-info.minisig — check nginx + ${MINISIGN_CACHE_INFO_SIG}"
+        HEALTHY=0
     fi
+    rm -f "${_SIG_TMP}"
 fi
 
 if [[ $HEALTHY -eq 1 ]]; then
