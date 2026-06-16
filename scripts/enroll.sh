@@ -78,7 +78,13 @@ wait_for_url() {
     ok "${label} is up"
 }
 
-gen_password() { head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 24; }
+gen_password() {
+    local pw
+    pw=$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 24)
+    # Paranoia: tr -d can strip enough chars to produce a short result.
+    [[ ${#pw} -ge 16 ]] || { echo "gen_password produced a short result (${#pw} chars) — retry" >&2; return 1; }
+    printf '%s' "${pw}"
+}
 
 write_enroll_nix() {
     local signing_pub="$1" harmonia_pub_key="$2"
@@ -112,7 +118,7 @@ banner() {
     printf "  %-28s %s\n" "Signing public key:"  "${MINISIGN_PUB}"
     printf "  %-28s %s\n" "Harmonia cache key:"  "${HARMONIA_PUB}"
     printf "  %-28s %s\n" "Katello UI:"          "${KATELLO_URL}"
-    printf "  %-28s %s\n" "Katello password:"    "$(cat ${KATELLO_ADMIN_PW_FILE} 2>/dev/null || echo '(see file)')"
+    printf "  %-28s %s\n" "Katello password:"    "$(cat "${KATELLO_ADMIN_PW_FILE}" 2>/dev/null || echo '(see file)')"
     echo
     printf "  ${BOLD}Next steps:${NC}\n"
     printf "  %-28s %s\n" "Daemon status:"       "systemctl status sourceos-syncd"
@@ -195,12 +201,18 @@ ok "Pass 1 complete ($(elapsed)) — log: ${PASS1_LOG}"
 
 step 3 "Device age key"
 
+rm -f "${AGE_KEY}.tmp"  # clean up stale temp from a previous interrupted run
 require_cmd age-keygen
 
 if [[ -f "${AGE_KEY}" ]]; then
     ok "Age key already exists"
 else
-    age-keygen -o "${AGE_KEY}"
+    # Capture stdout so the write is atomic: age-keygen -o FILE truncates before
+    # writing, leaving a corrupt partial file if interrupted. Stdout capture +
+    # mv means re-runs see no file (and regenerate) rather than a corrupt one.
+    age-keygen 2>/dev/null > "${AGE_KEY}.tmp"
+    [[ -s "${AGE_KEY}.tmp" ]] || die "age-keygen produced empty output — check age installation"
+    mv "${AGE_KEY}.tmp" "${AGE_KEY}"
     chmod 600 "${AGE_KEY}"
     ok "Generated ${AGE_KEY} ($(elapsed))"
 fi
@@ -340,8 +352,10 @@ if [[ "${_needs_encrypt}" -eq 1 ]]; then
     chmod 600 "${_SECRETS_TMP}"
     trap "rm -f ${PLAINTEXT} ${_SECRETS_TMP}" EXIT
     SOPS_AGE_RECIPIENTS="${AGE_PUBKEY}" sops --encrypt "${PLAINTEXT}" > "${_SECRETS_TMP}"
+    [[ -s "${_SECRETS_TMP}" ]] || \
+        die "sops --encrypt produced empty output — check AGE_PUBKEY format and sops version"
     mv "${_SECRETS_TMP}" "${SECRETS_YAML}"
-    chmod 600 "${SECRETS_YAML}"
+    # mv preserves permissions from _SECRETS_TMP (already 600 via umask 077).
     rm -f "${PLAINTEXT}"; trap - EXIT
     ok "Encrypted secrets written to ${SECRETS_YAML} ($(elapsed))"
 fi
@@ -485,7 +499,7 @@ fi
 # repopulate the cache on its first sync cycle.
 info "Pushing NixOS closure to local harmonia cache (http://127.0.0.1:8101)..."
 _HARM_UP=0
-for _i in $(seq 1 12); do
+for _i in {1..12}; do
     if curl -fsSk --max-time 5 "http://127.0.0.1:8101/nix-cache-info" &>/dev/null; then
         _HARM_UP=1; break
     fi
@@ -543,7 +557,7 @@ step 12 "Verify enrollment"
 # slow path it can take longer. A fixed sleep either wastes time or races.
 HEALTHY=1
 _SYNCD_UP=0
-for _i in $(seq 1 6); do
+for _i in {1..6}; do
     if systemctl is-active --quiet sourceos-syncd 2>/dev/null; then
         _SYNCD_UP=1; break
     fi
@@ -553,6 +567,28 @@ if [[ $_SYNCD_UP -eq 1 ]]; then
     ok "sourceos-syncd: active"
 else
     warn "sourceos-syncd not active after 30s (may still be starting)"
+    HEALTHY=0
+fi
+
+# sops-nix-activate is a oneshot: it stays in 'failed' state (not 'inactive')
+# when decryption fails. Distinguish "still starting" from "sops blew up".
+if systemctl is-failed --quiet sops-nix-activate 2>/dev/null; then
+    warn "sops-nix-activate FAILED — secrets not decrypted; sourceos-syncd will not start"
+    warn "  Diagnose: journalctl -u sops-nix-activate | tail -30"
+    warn "  Common cause: age key mismatch — re-run: rm -f ${SECRETS_YAML} && sudo bash scripts/enroll.sh"
+    HEALTHY=0
+else
+    ok "sops-nix-activate: ok (secrets decrypted)"
+fi
+
+# Verify Katello containers are still running after the long enrollment.
+# They can be OOM-killed during nix build (steps 10–11) without the script noticing.
+_KATELLO_FINAL=$(docker ps --filter "name=katello" --format "{{.Names}}" 2>/dev/null | wc -l | tr -d ' ')
+if [[ "${_KATELLO_FINAL}" -ge 1 ]]; then
+    ok "Katello containers: ${_KATELLO_FINAL} running"
+else
+    warn "No Katello containers running — they may have crashed during enrollment"
+    warn "  Restart: docker-compose -f ${COMPOSE_FILE} up -d"
     HEALTHY=0
 fi
 
