@@ -117,11 +117,11 @@
     "sourceos-syncd-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1781627880,
-        "narHash": "sha256-9QRlZyhKNTH15KWf+M5P137Axf43FHq6AMExAKauMHs=",
+        "lastModified": 1781630368,
+        "narHash": "sha256-z3tQB35G6oh+rKLV9hJtk0c3LtTDgVwSYDWy/6WtE2Y=",
         "owner": "SourceOS-Linux",
         "repo": "sourceos-syncd",
-        "rev": "8f845b7d3053ba704a4c570aa23e9fae9565914c",
+        "rev": "a5762779dacc371bf35ce522b4cd3b0b7952a9ed",
         "type": "github"
       },
       "original": {
