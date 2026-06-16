@@ -1,147 +1,187 @@
 #!/usr/bin/env bash
-# M2 SourceOS enrollment script.
+# SourceOS M2 enrollment script.
 #
-# Run once after Asahi Linux + NixOS base install.
-# Idempotent: re-running is safe after partial failures.
-#
-# What this does:
-#   1. Generate hardware-configuration.nix (device-specific, gitignored)
-#   2. nixos-rebuild switch pass 1 — installs Docker, age, sops, minisign
-#   3. Generate device age key at /etc/sourceos/age.key
-#   4. Clone/update prophet-platform, start Foreman+Katello via Docker Compose
-#   5. Set up SourceOS org + content view + lifecycle envs in Katello
-#   6. Encrypt Katello password as SOPS secret at /etc/sourceos/secrets.yaml
-#   7. Build and push the NixOS closure to the local Katello cache
-#   8. Promote content view dev → candidate → stable
-#   9. Generate minisign key pair, patch signingPublicKey into host config
-#  10. nixos-rebuild switch pass 2 — live config with secrets + signing key
-#  11. Verify sourceos-syncd is running and healthy
+# Run once after Asahi Linux + NixOS base install. Idempotent.
 #
 # Usage (run as root from the source-os repo root):
-#   sudo bash scripts/enroll.sh [--repo-root /path/to/source-os] [--org SocioProphet]
+#   sudo bash scripts/enroll.sh
+#
+# Environment overrides:
+#   SOURCEOS_REPO_ROOT        path to this repo  (default: script's parent dir)
+#   PROPHET_PLATFORM_ROOT     path for prophet-platform clone
+#   SOURCEOS_ORG              Katello org name   (default: SocioProphet)
+#   SOURCEOS_HOST             NixOS host target  (default: builder-aarch64)
 
 set -euo pipefail
 
-# ── Config ──────────────────────────────────────────────────────────────────
+# ── Config ────────────────────────────────────────────────────────────────────
 
 REPO_ROOT="${SOURCEOS_REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PROPHET_PLATFORM_ROOT="${PROPHET_PLATFORM_ROOT:-/opt/prophet-platform}"
 ORG="${SOURCEOS_ORG:-SocioProphet}"
 HOST="${SOURCEOS_HOST:-builder-aarch64}"
+
 KATELLO_URL="https://127.0.0.1:8443"
 KATELLO_USER="admin"
-AGE_KEY_PATH="/etc/sourceos/age.key"
-AGE_PUB_PATH="/etc/sourceos/age.pub"
-SECRETS_YAML="/etc/sourceos/secrets.yaml"
-MINISIGN_PUB="/etc/sourceos/nix-cache.pub"
-MINISIGN_SEC="/etc/sourceos/nix-cache.sec"
 SOURCEOS_DIR="/etc/sourceos"
+AGE_KEY="${SOURCEOS_DIR}/age.key"
+AGE_PUB="${SOURCEOS_DIR}/age.pub"
+SECRETS_YAML="${SOURCEOS_DIR}/secrets.yaml"
+MINISIGN_PUB="${SOURCEOS_DIR}/nix-cache.pub"
+MINISIGN_SEC="${SOURCEOS_DIR}/nix-cache.sec"
+MINISIGN_CACHE_INFO="${SOURCEOS_DIR}/nix-cache-info"
+MINISIGN_CACHE_INFO_SIG="${SOURCEOS_DIR}/nix-cache-info.minisig"
+HARMONIA_KEY="${SOURCEOS_DIR}/harmonia-signing.key"
+HARMONIA_PUB="${SOURCEOS_DIR}/harmonia-signing.pub"
+KATELLO_ADMIN_PW_FILE="${SOURCEOS_DIR}/katello-admin-password"
+ENROLL_NIX="${REPO_ROOT}/hosts/${HOST}/enroll.nix"
+HW_CONFIG="${REPO_ROOT}/hosts/${HOST}/hardware-configuration.nix"
 COMPOSE_FILE="${PROPHET_PLATFORM_ROOT}/infra/local/docker-compose.foreman-katello.yml"
 COMPOSE_ENV="${PROPHET_PLATFORM_ROOT}/infra/local/foreman-katello/.env"
 COMPOSE_ENV_EXAMPLE="${PROPHET_PLATFORM_ROOT}/infra/local/foreman-katello/.env.example"
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+TOTAL_STEPS=12
+ENROLL_START=$(date +%s)
 
-log()  { echo "[enroll] $*"; }
-die()  { echo "[enroll] ERROR: $*" >&2; exit 1; }
-ok()   { echo "[enroll] ✓ $*"; }
-step() { echo; echo "══════════════════════════════════════════════════════"; echo "[enroll] STEP $*"; echo "══════════════════════════════════════════════════════"; }
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-require_cmd() {
-    command -v "$1" &>/dev/null || die "'$1' not found — ensure pass-1 nixos-rebuild completed successfully"
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+
+_step_start=0
+step() {
+    local n="$1"; shift
+    _step_start=$(date +%s)
+    echo
+    printf "${CYAN}${BOLD}[%02d/%d]${NC} ${BOLD}%s${NC}\n" "$n" "$TOTAL_STEPS" "$*"
+    printf "       %s\n" "$(printf '─%.0s' {1..55})"
 }
+ok()   { printf "  ${GREEN}✓${NC}  %s\n" "$*"; }
+info() { printf "  ${CYAN}·${NC}  %s\n" "$*"; }
+warn() { printf "  ${YELLOW}!${NC}  %s\n" "$*"; }
+die()  { printf "  ${RED}✗  ERROR:${NC} %s\n" "$*" >&2; exit 1; }
+elapsed() { echo $(( $(date +%s) - _step_start ))s; }
+
+require_cmd() { command -v "$1" &>/dev/null || die "'$1' not found — did pass-1 nixos-rebuild complete?"; }
 
 wait_for_url() {
-    local url="$1" label="${2:-service}" max="${3:-120}" interval=5 elapsed=0
-    log "Waiting for ${label} at ${url} (up to ${max}s)..."
+    local url="$1" label="${2:-service}" max="${3:-120}" interval=5 n=0
+    info "Waiting for ${label}..."
     while ! curl -fsSk --max-time 5 "$url" &>/dev/null; do
-        sleep $interval
-        elapsed=$((elapsed + interval))
-        [[ $elapsed -ge $max ]] && die "${label} did not become ready at ${url} after ${max}s"
-        log "  ... still waiting (${elapsed}s)"
+        sleep $interval; n=$((n + interval))
+        [[ $n -ge $max ]] && die "${label} not ready at ${url} after ${max}s"
+        [[ $((n % 30)) -eq 0 ]] && info "  still waiting (${n}s)..."
     done
     ok "${label} is up"
 }
 
-gen_password() {
-    head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 24
+gen_password() { head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 24; }
+
+write_enroll_nix() {
+    local signing_pub="$1" harmonia_pub_key="$2"
+    cat > "${ENROLL_NIX}" <<NIX
+# Generated by scripts/enroll.sh — device-specific, gitignored.
+# Re-run scripts/enroll.sh to regenerate.
+{ ... }:
+{
+  sourceos.syncd.signingPublicKey = "${signing_pub}";
+  nix.settings.trusted-public-keys = [ "${harmonia_pub_key}" ];
+}
+NIX
+    ok "Wrote ${ENROLL_NIX}"
 }
 
-# ── Preflight ─────────────────────────────────────────────────────────────────
+banner() {
+    local total=$(( $(date +%s) - ENROLL_START ))
+    echo
+    printf "${GREEN}${BOLD}"
+    printf "╔══════════════════════════════════════════════════════════════╗\n"
+    printf "║        SourceOS builder-aarch64 enrollment complete         ║\n"
+    printf "╚══════════════════════════════════════════════════════════════╝\n"
+    printf "${NC}"
+    echo
+    printf "  %-28s %s\n" "Total time:"          "${total}s"
+    printf "  %-28s %s\n" "Age key:"             "${AGE_KEY}"
+    printf "  %-28s %s\n" "Secrets:"             "${SECRETS_YAML}"
+    printf "  %-28s %s\n" "Signing public key:"  "${MINISIGN_PUB}"
+    printf "  %-28s %s\n" "Harmonia cache key:"  "${HARMONIA_PUB}"
+    printf "  %-28s %s\n" "Katello UI:"          "${KATELLO_URL}"
+    printf "  %-28s %s\n" "Katello password:"    "$(cat ${KATELLO_ADMIN_PW_FILE} 2>/dev/null || echo '(see file)')"
+    echo
+    printf "  ${BOLD}Next steps:${NC}\n"
+    printf "  %-28s %s\n" "Daemon status:"       "systemctl status sourceos-syncd"
+    printf "  %-28s %s\n" "Live logs:"           "journalctl -u sourceos-syncd -f"
+    printf "  %-28s %s\n" "Last receipt:"        "sourceos-syncd receipts last"
+    printf "  %-28s %s\n" "Full health check:"   "bash scripts/doctor.sh"
+    echo
+}
 
-step "0 — Preflight"
+# ── Step 0: Preflight ─────────────────────────────────────────────────────────
 
-[[ $EUID -eq 0 ]] || die "Run as root: sudo bash scripts/enroll.sh"
-[[ -f /etc/nixos/configuration.nix || -d /nix ]] || die "Does not look like a NixOS system"
-[[ -f "${REPO_ROOT}/flake.nix" ]] || die "flake.nix not found at ${REPO_ROOT} — set SOURCEOS_REPO_ROOT"
+step 0 "Preflight checks"
 
-mkdir -p "${SOURCEOS_DIR}"
-chmod 700 "${SOURCEOS_DIR}"
+[[ $EUID -eq 0 ]]              || die "Run as root: sudo bash scripts/enroll.sh"
+[[ -d /nix ]]                  || die "Not a NixOS system (/nix not found)"
+[[ -f "${REPO_ROOT}/flake.nix" ]] || die "flake.nix not found — set SOURCEOS_REPO_ROOT"
 
-ok "Running as root on NixOS"
-log "  Repo root:      ${REPO_ROOT}"
-log "  Host:           ${HOST}"
-log "  Org:            ${ORG}"
-log "  Katello URL:    ${KATELLO_URL}"
+mkdir -p "${SOURCEOS_DIR}" && chmod 700 "${SOURCEOS_DIR}"
+
+info "Repo root:   ${REPO_ROOT}"
+info "Host target: ${HOST}"
+info "Katello org: ${ORG}"
+ok   "Preflight passed ($(elapsed))"
 
 # ── Step 1: hardware-configuration.nix ───────────────────────────────────────
 
-step "1 — Hardware configuration"
+step 1 "Hardware configuration"
 
-HW_CONFIG="${REPO_ROOT}/hosts/${HOST}/hardware-configuration.nix"
-
-if [[ -f "$HW_CONFIG" ]]; then
-    ok "hardware-configuration.nix already present, skipping generation"
+if [[ -f "${HW_CONFIG}" ]]; then
+    ok "hardware-configuration.nix already present"
 else
-    log "Generating hardware-configuration.nix..."
-    nixos-generate-config --show-hardware-config > "$HW_CONFIG"
-    ok "Generated ${HW_CONFIG}"
+    nixos-generate-config --show-hardware-config > "${HW_CONFIG}"
+    ok "Generated ${HW_CONFIG} ($(elapsed))"
 fi
 
-# ── Step 2: nixos-rebuild pass 1 (installs Docker, tooling) ─────────────────
+# ── Step 2: nixos-rebuild pass 1 ─────────────────────────────────────────────
 
-step "2 — nixos-rebuild switch (pass 1: install Docker + tooling)"
+step 2 "nixos-rebuild switch — pass 1 (installs Docker, age, sops, minisign)"
 
-log "Building and switching to builder-aarch64 configuration..."
-log "(This installs Docker, age, sops, minisign, docker-compose)"
-nixos-rebuild switch --flake "${REPO_ROOT}#${HOST}" 2>&1 | tee /tmp/sourceos-rebuild-pass1.log
-ok "Pass 1 rebuild complete"
+info "Building... (5-15 min on first run, downloads packages)"
+nixos-rebuild switch --flake "${REPO_ROOT}#${HOST}" 2>&1 | \
+    grep -E '^(building|fetching|error|warning|activating)' || true
+ok "Pass 1 complete ($(elapsed))"
 
-# ── Step 3: age key generation ───────────────────────────────────────────────
+# ── Step 3: Age key ───────────────────────────────────────────────────────────
 
-step "3 — Age key"
+step 3 "Device age key"
 
 require_cmd age-keygen
 
-if [[ -f "$AGE_KEY_PATH" ]]; then
-    ok "Age key already exists at ${AGE_KEY_PATH}"
+if [[ -f "${AGE_KEY}" ]]; then
+    ok "Age key already exists"
 else
-    log "Generating device age key..."
-    age-keygen -o "$AGE_KEY_PATH" 2>/dev/null
-    chmod 600 "$AGE_KEY_PATH"
-    ok "Generated ${AGE_KEY_PATH}"
+    age-keygen -o "${AGE_KEY}" 2>/dev/null
+    chmod 600 "${AGE_KEY}"
+    ok "Generated ${AGE_KEY} ($(elapsed))"
 fi
-
-AGE_PUBKEY=$(age-keygen -y "$AGE_KEY_PATH")
-echo "$AGE_PUBKEY" > "$AGE_PUB_PATH"
-ok "Age public key: ${AGE_PUBKEY}"
+AGE_PUBKEY=$(age-keygen -y "${AGE_KEY}")
+echo "${AGE_PUBKEY}" > "${AGE_PUB}"
+info "Public key: ${AGE_PUBKEY}"
 
 # ── Step 4: Foreman+Katello ───────────────────────────────────────────────────
 
-step "4 — Foreman+Katello (prophet-platform)"
+step 4 "Foreman+Katello (docker compose up)"
 
 require_cmd docker
 require_cmd docker-compose
 
-# Clone prophet-platform if not present
 if [[ ! -d "${PROPHET_PLATFORM_ROOT}" ]]; then
-    log "Cloning prophet-platform to ${PROPHET_PLATFORM_ROOT}..."
-    git clone https://github.com/SocioProphet/prophet-platform.git "${PROPHET_PLATFORM_ROOT}"
+    info "Cloning prophet-platform..."
+    git clone git@github.com:SocioProphet/prophet-platform.git "${PROPHET_PLATFORM_ROOT}" || \
+        git clone https://github.com/SocioProphet/prophet-platform.git "${PROPHET_PLATFORM_ROOT}"
 fi
 
-# Write .env if not present
 if [[ ! -f "${COMPOSE_ENV}" ]]; then
-    log "Generating Foreman+Katello .env..."
+    info "Generating Foreman+Katello .env (random passwords)..."
     FOREMAN_ADMIN_PASSWORD=$(gen_password)
     KATELLO_PG_PASSWORD=$(gen_password)
 
@@ -150,205 +190,222 @@ if [[ ! -f "${COMPOSE_ENV}" ]]; then
     sed -i "s|^KATELLO_PG_PASSWORD=.*|KATELLO_PG_PASSWORD=${KATELLO_PG_PASSWORD}|" "${COMPOSE_ENV}"
     chmod 600 "${COMPOSE_ENV}"
 
-    # Save admin password separately for use in later steps
-    echo "${FOREMAN_ADMIN_PASSWORD}" > "${SOURCEOS_DIR}/katello-admin-password"
-    chmod 600 "${SOURCEOS_DIR}/katello-admin-password"
-    ok "Generated .env with random passwords"
+    echo "${FOREMAN_ADMIN_PASSWORD}" > "${KATELLO_ADMIN_PW_FILE}"
+    chmod 600 "${KATELLO_ADMIN_PW_FILE}"
+    ok "Generated .env"
 else
     ok ".env already exists"
 fi
 
-KATELLO_PASSWORD=$(cat "${SOURCEOS_DIR}/katello-admin-password")
+KATELLO_PASSWORD=$(cat "${KATELLO_ADMIN_PW_FILE}")
 
-# Start Foreman+Katello
-log "Starting Foreman+Katello (first start takes 10–15 minutes)..."
 docker-compose -f "${COMPOSE_FILE}" --env-file "${COMPOSE_ENV}" up -d
+info "Containers started. Waiting for foreman-installer (10-15 min)..."
+info "Follow: docker compose -f ${COMPOSE_FILE} logs -f foreman-katello"
 
-# Wait for Foreman installer to complete (writes marker file inside container)
-log "Waiting for foreman-installer to complete (may take up to 15 min)..."
-MAX_WAIT=1200
-ELAPSED=0
-INTERVAL=15
+MAX_WAIT=1200; ELAPSED=0; INTERVAL=15
 while ! docker exec katello-foreman test -f /var/lib/foreman/.sourceos-initialized 2>/dev/null; do
-    sleep $INTERVAL
-    ELAPSED=$((ELAPSED + INTERVAL))
-    [[ $ELAPSED -ge $MAX_WAIT ]] && die "Foreman installer did not complete after ${MAX_WAIT}s. Check: docker compose -f ${COMPOSE_FILE} logs -f foreman-katello"
-    if (( ELAPSED % 60 == 0 )); then
-        log "  ... foreman-installer still running (${ELAPSED}s elapsed)"
-    fi
+    sleep $INTERVAL; ELAPSED=$((ELAPSED + INTERVAL))
+    [[ $ELAPSED -ge $MAX_WAIT ]] && \
+        die "Foreman installer timed out after ${MAX_WAIT}s. Check logs above."
+    [[ $((ELAPSED % 60)) -eq 0 ]] && info "  foreman-installer running (${ELAPSED}s)..."
 done
 
-wait_for_url "${KATELLO_URL}" "Foreman HTTPS" 120
+wait_for_url "${KATELLO_URL}/api/v2/status" "Foreman API" 120
+ok "Foreman+Katello ready ($(elapsed))"
 
-ok "Foreman+Katello is running"
+# ── Step 5: Katello content structure ─────────────────────────────────────────
 
-# ── Step 5: Katello content setup ────────────────────────────────────────────
+step 5 "Katello content structure"
 
-step "5 — Katello content structure"
-
-FOREMAN_URL="${KATELLO_URL}" \
-FOREMAN_USER="${KATELLO_USER}" \
-FOREMAN_PASSWORD="${KATELLO_PASSWORD}" \
-ORG="${ORG}" \
+FOREMAN_URL="${KATELLO_URL}" FOREMAN_USER="${KATELLO_USER}" \
+FOREMAN_PASSWORD="${KATELLO_PASSWORD}" ORG="${ORG}" \
 bash "${REPO_ROOT}/scripts/katello-sourceos-setup.sh"
 
-ok "Katello org, product, repos, content view created"
+ok "Org, product, repos, content view ready ($(elapsed))"
 
-# ── Step 6: SOPS secrets ─────────────────────────────────────────────────────
+# ── Step 6: SOPS-encrypted secrets ───────────────────────────────────────────
 
-step "6 — Encrypt secrets with SOPS"
+step 6 "Encrypt secrets with SOPS"
 
 require_cmd sops
 
-if [[ -f "$SECRETS_YAML" ]]; then
-    # Validate it's a sops-encrypted file
-    if sops --age "$AGE_PUBKEY" --decrypt "$SECRETS_YAML" &>/dev/null; then
-        ok "secrets.yaml already exists and decrypts correctly"
+_needs_encrypt=0
+if [[ -f "${SECRETS_YAML}" ]]; then
+    if python3 -c "
+import json, sys
+d = open('${SECRETS_YAML}').read()
+if 'sops' not in d: sys.exit(1)
+" 2>/dev/null; then
+        ok "secrets.yaml already SOPS-encrypted"
     else
-        log "secrets.yaml exists but may not be encrypted correctly — re-encrypting"
-        _regen_secrets=1
+        warn "secrets.yaml exists but is not encrypted — re-encrypting"
+        _needs_encrypt=1
     fi
 else
-    _regen_secrets=1
+    _needs_encrypt=1
 fi
 
-if [[ "${_regen_secrets:-0}" == "1" ]]; then
-    PLAINTEXT=$(mktemp)
-    cat > "$PLAINTEXT" <<YAML
-katello-password: "${KATELLO_PASSWORD}"
-YAML
-    SOPS_AGE_RECIPIENTS="$AGE_PUBKEY" sops --encrypt "$PLAINTEXT" > "$SECRETS_YAML"
-    chmod 600 "$SECRETS_YAML"
-    rm -f "$PLAINTEXT"
-    ok "Encrypted secrets written to ${SECRETS_YAML}"
+if [[ "${_needs_encrypt}" -eq 1 ]]; then
+    PLAINTEXT=$(mktemp /tmp/sourceos-secrets-XXXXXX.yaml)
+    trap "rm -f ${PLAINTEXT}" EXIT
+    printf 'katello-password: "%s"\n' "${KATELLO_PASSWORD}" > "${PLAINTEXT}"
+    SOPS_AGE_RECIPIENTS="${AGE_PUBKEY}" sops --encrypt "${PLAINTEXT}" > "${SECRETS_YAML}"
+    chmod 600 "${SECRETS_YAML}"
+    rm -f "${PLAINTEXT}"; trap - EXIT
+    ok "Encrypted secrets written to ${SECRETS_YAML} ($(elapsed))"
 fi
 
-# ── Step 7: Build and push NixOS closure ─────────────────────────────────────
+# ── Step 7: harmonia binary cache signing key ─────────────────────────────────
 
-step "7 — Build + push NixOS closure to local Katello cache"
+step 7 "harmonia binary cache signing key"
 
-log "Building builder-aarch64 NixOS system closure..."
-CLOSURE=$(nix build "${REPO_ROOT}#nixosConfigurations.${HOST}.config.system.build.toplevel" --no-link --print-out-paths 2>&1 | tail -1)
-ok "Built closure: ${CLOSURE}"
-
-log "Pushing closure to local Katello Nix cache (http://127.0.0.1:8101)..."
-nix copy --to "http://127.0.0.1:8101?compression=zstd" "${CLOSURE}" || {
-    log "WARNING: nix copy failed — Pulp content endpoint may not be ready yet."
-    log "  You can retry manually: nix copy --to 'http://127.0.0.1:8101?compression=zstd' ${CLOSURE}"
-}
-ok "Closure pushed to Katello"
-
-# ── Step 8: Promote content view to stable ───────────────────────────────────
-
-step "8 — Promote content view dev → candidate → stable"
-
-HAMMER="docker exec katello-foreman hammer \
-    --server ${KATELLO_URL} \
-    --username ${KATELLO_USER} \
-    --password ${KATELLO_PASSWORD}"
-
-CV_VERSION=$(${HAMMER} --output json content-view version list \
-    --organization "${ORG}" \
-    --content-view "sourceos-builder-aarch64" 2>/dev/null | \
-    python3 -c "import json,sys; vs=json.load(sys.stdin); print(sorted(vs,key=lambda v:v['ID'])[-1]['Version'])" 2>/dev/null || echo "")
-
-if [[ -z "$CV_VERSION" ]]; then
-    log "WARNING: Could not determine content view version — skipping promotion."
-    log "  Promote manually after Katello sync completes:"
-    log "  docker exec katello-foreman hammer content-view version promote \\"
-    log "    --organization '${ORG}' --content-view sourceos-builder-aarch64 \\"
-    log "    --version <VERSION> --to-lifecycle-environment stable"
+if [[ -f "${HARMONIA_KEY}" && -f "${HARMONIA_PUB}" ]]; then
+    ok "harmonia signing key already exists"
 else
-    for env in candidate stable; do
-        ${HAMMER} content-view version promote \
-            --organization "${ORG}" \
-            --content-view "sourceos-builder-aarch64" \
-            --version "${CV_VERSION}" \
-            --to-lifecycle-environment "${env}" 2>/dev/null || \
-            log "  Note: promotion to ${env} may have already been done"
-    done
-    ok "Content view v${CV_VERSION} promoted to stable"
+    # nix-store --generate-binary-cache-key <name> <secret-key-file> <public-key-file>
+    nix-store --generate-binary-cache-key "builder-aarch64-1" "${HARMONIA_KEY}" "${HARMONIA_PUB}"
+    chmod 600 "${HARMONIA_KEY}"
+    ok "Generated harmonia signing key ($(elapsed))"
 fi
 
-# ── Step 9: minisign key pair ─────────────────────────────────────────────────
+HARMONIA_PUBKEY=$(cat "${HARMONIA_PUB}")
+info "harmonia public key: ${HARMONIA_PUBKEY}"
 
-step "9 — minisign signing key pair"
+# ── Step 8: minisign key pair + nix-cache-info signature ──────────────────────
+
+step 8 "minisign key pair and nix-cache-info signature"
 
 require_cmd minisign
 
-if [[ -f "$MINISIGN_PUB" && -f "$MINISIGN_SEC" ]]; then
+if [[ -f "${MINISIGN_PUB}" && -f "${MINISIGN_SEC}" ]]; then
     ok "minisign key pair already exists"
 else
-    log "Generating minisign key pair (Nix cache signing)..."
-    log "(You will be prompted for a passphrase — use empty for unattended builds)"
-    minisign -G -p "$MINISIGN_PUB" -s "$MINISIGN_SEC"
-    chmod 600 "$MINISIGN_SEC"
-    ok "Generated ${MINISIGN_PUB} and ${MINISIGN_SEC}"
+    info "Generating minisign key pair (press Enter for empty passphrase)..."
+    minisign -G -p "${MINISIGN_PUB}" -s "${MINISIGN_SEC}"
+    chmod 600 "${MINISIGN_SEC}"
+    ok "Generated ${MINISIGN_PUB} ($(elapsed))"
 fi
 
-SIGNING_PUBKEY=$(grep -v '^untrusted comment' "$MINISIGN_PUB" | head -1)
-ok "Signing public key: ${SIGNING_PUBKEY}"
+SIGNING_PUBKEY=$(grep -v '^untrusted comment' "${MINISIGN_PUB}" | head -1)
+info "Signing public key: ${SIGNING_PUBKEY}"
 
-# ── Step 10: patch signingPublicKey into host config ─────────────────────────
+# Write nix-cache-info and sign it. nginx serves the .minisig file alongside
+# harmonia so sourceos-syncd can verify the cache before pulling packages.
+cat > "${MINISIGN_CACHE_INFO}" <<EOF
+StoreDir: /nix/store
+WantMassQuery: 1
+Priority: 40
+EOF
 
-step "10 — Patch signingPublicKey into host config"
+minisign -S -s "${MINISIGN_SEC}" -m "${MINISIGN_CACHE_INFO}" -x "${MINISIGN_CACHE_INFO_SIG}" \
+    || die "minisign signing failed — check that ${MINISIGN_SEC} passphrase is empty"
+ok "Signed nix-cache-info → ${MINISIGN_CACHE_INFO_SIG} ($(elapsed))"
 
-HOST_CONFIG="${REPO_ROOT}/hosts/${HOST}/default.nix"
-if grep -q 'signingPublicKey' "$HOST_CONFIG"; then
-    # Update existing value
-    sed -i "s|signingPublicKey = .*|signingPublicKey = \"${SIGNING_PUBKEY}\";|" "$HOST_CONFIG"
-    ok "Updated signingPublicKey in ${HOST_CONFIG}"
+# ── Step 9: Write enroll.nix (replaces old sed-patching approach) ─────────────
+
+step 9 "Write enroll.nix (device-specific NixOS settings)"
+
+write_enroll_nix "${SIGNING_PUBKEY}" "${HARMONIA_PUBKEY}"
+ok "enroll.nix written — no Nix file patching needed ($(elapsed))"
+
+# ── Step 10: Build + push NixOS closure to local cache ────────────────────────
+
+step 10 "Build NixOS closure + push to harmonia cache"
+
+info "Building builder-aarch64 system closure..."
+CLOSURE=$(nix build "${REPO_ROOT}#nixosConfigurations.${HOST}.config.system.build.toplevel" \
+    --no-link --print-out-paths 2>&1 | tail -1)
+ok "Built: ${CLOSURE}"
+
+# Harmonia must be running before we can push (it starts after pass-2 rebuild).
+# We push after pass-2. Skip here and record for the next step.
+info "Closure push to harmonia will happen after pass-2 rebuild in step 11."
+
+# ── Step 11: nixos-rebuild pass 2 (live config with all secrets + keys) ───────
+
+step 11 "nixos-rebuild switch — pass 2 (live config: secrets, signing key, harmonia)"
+
+info "Activating final configuration..."
+nixos-rebuild switch --flake "${REPO_ROOT}#${HOST}" 2>&1 | \
+    grep -E '^(building|fetching|error|warning|activating)' || true
+ok "Pass 2 complete ($(elapsed))"
+
+# Now push the closure to the running harmonia cache
+info "Pushing NixOS closure to local harmonia cache (http://127.0.0.1:8101)..."
+sleep 3  # brief pause for harmonia to finish starting
+if curl -fsSk http://127.0.0.1:8101/nix-cache-info &>/dev/null; then
+    nix copy --to "http://127.0.0.1:8101" "${CLOSURE}" && \
+        ok "Closure pushed to harmonia cache" || \
+        warn "nix copy failed — run manually: nix copy --to 'http://127.0.0.1:8101' ${CLOSURE}"
 else
-    # Insert after the healthCheck block's closing brace
-    sed -i "s|# signingPublicKey: set after generating the minisign key pair.|signingPublicKey = \"${SIGNING_PUBKEY}\";|" "$HOST_CONFIG"
-    ok "Inserted signingPublicKey into ${HOST_CONFIG}"
+    warn "harmonia not yet responding on :8101 — push manually after it starts"
+    warn "  nix copy --to 'http://127.0.0.1:8101' ${CLOSURE}"
 fi
 
-# ── Step 11: nixos-rebuild pass 2 (live config) ──────────────────────────────
+# Promote content view to stable so sourceos-syncd can pick it up
+info "Promoting content view to stable..."
+CV_VERSION=$(docker exec katello-foreman hammer \
+    --server "${KATELLO_URL}" --username "${KATELLO_USER}" --password "${KATELLO_PASSWORD}" \
+    --output json content-view version list \
+    --organization "${ORG}" --content-view "sourceos-builder-aarch64" 2>/dev/null | \
+    python3 -c "import json,sys; vs=json.load(sys.stdin); print(sorted(vs,key=lambda v:v['ID'])[-1]['Version'])" \
+    2>/dev/null || echo "")
 
-step "11 — nixos-rebuild switch (pass 2: live config with secrets + signing key)"
-
-nixos-rebuild switch --flake "${REPO_ROOT}#${HOST}" 2>&1 | tee /tmp/sourceos-rebuild-pass2.log
-ok "Pass 2 rebuild complete"
-
-# ── Step 12: verify ───────────────────────────────────────────────────────────
-
-step "12 — Verify"
-
-log "Waiting 10s for sourceos-syncd to start..."
-sleep 10
-
-if systemctl is-active --quiet sourceos-syncd; then
-    ok "sourceos-syncd is running"
+if [[ -n "${CV_VERSION}" ]]; then
+    for env in candidate stable; do
+        docker exec katello-foreman hammer \
+            --server "${KATELLO_URL}" --username "${KATELLO_USER}" --password "${KATELLO_PASSWORD}" \
+            content-view version promote \
+            --organization "${ORG}" \
+            --content-view "sourceos-builder-aarch64" \
+            --version "${CV_VERSION}" \
+            --to-lifecycle-environment "${env}" 2>/dev/null && \
+            ok "Promoted to ${env}" || info "Already at ${env} (or skipping)"
+    done
 else
-    log "WARNING: sourceos-syncd is not active yet"
-    log "  Check: journalctl -u sourceos-syncd -n 50"
+    warn "Could not determine CV version — promote manually after Katello sync completes"
 fi
 
-if sourceos-syncd receipts last --store-root /var/lib/sourceos-syncd &>/dev/null; then
-    ok "sourceos-syncd has emitted its first SyncCycleReceipt"
+# ── Step 12: Verify ────────────────────────────────────────────────────────────
+
+step 12 "Verify enrollment"
+
+sleep 10  # let sourceos-syncd start up
+
+HEALTHY=1
+if systemctl is-active --quiet sourceos-syncd 2>/dev/null; then
+    ok "sourceos-syncd: active"
 else
-    log "No receipt yet — daemon will emit one after the first successful poll"
-    log "  Check: journalctl -u sourceos-syncd -f"
+    warn "sourceos-syncd not active yet (may still be starting)"
+    HEALTHY=0
+fi
+
+if systemctl is-active --quiet harmonia 2>/dev/null; then
+    ok "harmonia: active"
+else
+    warn "harmonia not active yet"
+    HEALTHY=0
+fi
+
+if systemctl is-active --quiet nginx 2>/dev/null; then
+    ok "nginx (nix-cache proxy): active"
+    if curl -fsSk http://127.0.0.1:8101/nix-cache-info &>/dev/null; then
+        ok "Nix cache at http://127.0.0.1:8101 responding"
+    fi
+    if curl -fsSk http://127.0.0.1:8101/nix-cache-info.minisig &>/dev/null; then
+        ok "minisig endpoint serving correctly"
+    else
+        warn "minisig not yet at /nix-cache-info.minisig — check nginx + ${MINISIGN_CACHE_INFO_SIG}"
+    fi
+fi
+
+if [[ $HEALTHY -eq 1 ]]; then
+    ok "All services healthy ($(elapsed))"
+else
+    warn "Some services not yet active. Run: sudo bash scripts/doctor.sh"
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────────
 
-echo
-echo "╔══════════════════════════════════════════════════════════════════╗"
-echo "║           SourceOS builder-aarch64 enrollment complete          ║"
-echo "╚══════════════════════════════════════════════════════════════════╝"
-echo
-echo "  Age key:          ${AGE_KEY_PATH}"
-echo "  Secrets:          ${SECRETS_YAML}"
-echo "  Signing pub key:  ${MINISIGN_PUB}"
-echo "  Katello UI:       ${KATELLO_URL}  (admin / $(cat ${SOURCEOS_DIR}/katello-admin-password))"
-echo
-echo "  Daemon status:    systemctl status sourceos-syncd"
-echo "  Daemon logs:      journalctl -u sourceos-syncd -f"
-echo "  Last receipt:     sourceos-syncd receipts last"
-echo "  Health check:     sourceos-syncd sync check-health"
-echo
-echo "  Next: when Katello syncs a new content view version to 'stable',"
-echo "  sourceos-syncd will detect it within ${SOURCEOS_POLL_INTERVAL:-300}s and apply the update."
-echo
+banner
