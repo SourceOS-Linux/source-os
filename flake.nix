@@ -7,13 +7,17 @@
       url = "github:tpwrules/nixos-apple-silicon";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     lampstand-src = {
       url = "github:SocioProphet/lampstand";
       flake = false;
     };
   };
 
-  outputs = { self, nixpkgs, nixos-apple-silicon, lampstand-src }:
+  outputs = { self, nixpkgs, nixos-apple-silicon, sops-nix, lampstand-src }:
     let
       lib = nixpkgs.lib;
       systems = [ "x86_64-linux" "aarch64-linux" ];
@@ -85,6 +89,7 @@
           specialArgs = { inherit self; };
           modules = [
             nixos-apple-silicon.nixosModules.apple-silicon-support
+            sops-nix.nixosModules.sops
             self.nixosModules.sourceos-syncd
             ./hosts/builder-aarch64/default.nix
           ];

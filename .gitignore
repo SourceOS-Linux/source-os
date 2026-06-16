@@ -1,0 +1,3 @@
+
+# SOPS plaintext secrets — never commit
+hosts/**/secrets.yaml

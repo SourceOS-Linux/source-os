@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, self, ... }:
 {
   imports = [
     ../../profiles/linux-dev/default.nix
@@ -51,25 +51,41 @@
 
   security.sudo.wheelNeedsPassword = false;
 
-  # sourceos-syncd daemon: polls local Katello (127.0.0.1:8443) every 5 min
-  # and applies new content view versions automatically.
-  # katelloPassword is loaded from the SOPS-managed secrets file at runtime;
-  # set sourceos.syncd.katelloPasswordFile before activating.
+  # ── SOPS secrets ────────────────────────────────────────────────────────────
+  # secrets.yaml is encrypted with the device age key generated at enrollment.
+  # Encrypt with: sops --encrypt --age $(cat /etc/sourceos/age.pub) secrets.yaml
+  # The plaintext file is never committed to the repo.
+  sops.defaultSopsFile = ./secrets.yaml;
+  sops.age.keyFile = "/etc/sourceos/age.key";
+  sops.secrets.katello-password = {
+    owner = "sourceos-syncd";
+    group = "sourceos-syncd";
+    mode = "0400";
+  };
+
+  # ── sourceos-syncd daemon ────────────────────────────────────────────────────
+  # Polls local Katello every 5 min; applies new stable content view versions.
+  # Password loaded via SOPS-managed secret (not committed to repo).
   sourceos.syncd = {
     enable = true;
+    # package and sourceosBoot.package must point to built derivations.
+    # These are set below as overrides once the package derivations exist.
+    # For now, use placeholder that will be replaced with the real package.
     katelloUrl = "https://127.0.0.1:8443";
     lifecycleEnv = "stable";
     locus = "local";
     flakeRef = "github:SociOS-Linux/source-os#builder-aarch64";
     pollInterval = 300;
-    noVerifySsl = true;  # local self-signed cert; disable when real cert is provisioned
+    noVerifySsl = true;
+    katelloPasswordFile = config.sops.secrets.katello-password.path;
+    # signingPublicKey: set after generating the minisign key pair.
+    # Generate: minisign -G -p /etc/sourceos/nix-cache.pub -s /run/secrets/nix-cache.key
+    # Then embed the public key string here.
     healthCheck = {
       enable = true;
       delayAfterBootSec = 120;
       rollbackOnFailure = true;
     };
-    # katelloPasswordFile = "/run/secrets/katello-password";
-    # Set katelloPasswordFile (via sops-nix) before first activation.
   };
 
   system.stateVersion = "25.05";

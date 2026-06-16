@@ -1,20 +1,8 @@
 { config, lib, pkgs, ... }:
 let
   cfg = config.sourceos.syncd;
-
-  # sourceos-syncd is installed as a Python package on the device.
-  # The package derivation lives in packages/sourceos-syncd.nix; this module
-  # just wires it into systemd. If the package is not yet in the flake's
-  # packages output, set cfg.package to pkgs.sourceos-syncd once it's built.
-  defaultPackage = cfg.package;
-
-  syncEnv = lib.optionalAttrs (cfg.katelloPassword != "") {
-    KATELLO_PASSWORD = cfg.katelloPassword;
-  } // lib.optionalAttrs (cfg.katelloPasswordFile != "") {
-    # prefer the secrets file over inline value
-  };
-
-  credentialFile = lib.mkIf (cfg.katelloPasswordFile != "") cfg.katelloPasswordFile;
+  syncdPkg = cfg.package;
+  bootPkg = cfg.sourceosBoot.package;
 
 in
 {
@@ -98,6 +86,23 @@ in
       description = "Skip TLS certificate verification (local dev only).";
     };
 
+    signingPublicKey = lib.mkOption {
+      type = lib.types.str;
+      default = "";
+      description = ''
+        minisign public key (RWS...) embedded in the image. When set, the
+        daemon verifies the nix-cache-info signature before running nix copy.
+        Generate with: minisign -G -p /etc/sourceos/nix-cache.pub -s /run/secrets/nix-cache.key
+      '';
+    };
+
+    sourceosBoot = {
+      package = lib.mkOption {
+        type = lib.types.package;
+        description = "The sourceos-boot package for rollback execution.";
+      };
+    };
+
     # Health check options
 
     healthCheck = {
@@ -148,31 +153,37 @@ in
         Restart = "on-failure";
         RestartSec = "30s";
 
+        # LoadCredential places the secret at /run/credentials/<service>/<name>.
+        # The daemon reads KATELLO_PASSWORD_FILE (supported since feat/content-signing)
+        # so we point that env var at the credential path. This avoids putting
+        # the plaintext password in the process environment.
+        LoadCredential = lib.optional (cfg.katelloPasswordFile != "")
+          "KATELLO_PASSWORD_SECRET:${cfg.katelloPasswordFile}";
+
+        Environment =
+          lib.optional (cfg.katelloPassword != "") "KATELLO_PASSWORD=${cfg.katelloPassword}"
+          ++ lib.optional (cfg.katelloPasswordFile != "")
+               "KATELLO_PASSWORD_FILE=/run/credentials/sourceos-syncd.service/KATELLO_PASSWORD_SECRET"
+          ++ lib.optional (cfg.signingPublicKey != "")
+               "SOURCEOS_SIGNING_PUBLIC_KEY=${cfg.signingPublicKey}";
+
+        # Password is not passed as a CLI flag — it comes from KATELLO_PASSWORD
+        # or KATELLO_PASSWORD_FILE env (set above). All other config is explicit.
         ExecStart = lib.concatStringsSep " " (
-          [ "${defaultPackage}/bin/sourceos-syncd" "sync" "daemon" ]
-          ++ [ "--katello-url" cfg.katelloUrl ]
-          ++ [ "--katello-user" cfg.katelloUser ]
-          ++ [ "--org" cfg.org ]
-          ++ [ "--content-view" cfg.contentView ]
+          [ "${syncdPkg}/bin/sourceos-syncd" "sync" "daemon" ]
+          ++ [ "--katello-url" (lib.escapeShellArg cfg.katelloUrl) ]
+          ++ [ "--katello-user" (lib.escapeShellArg cfg.katelloUser) ]
+          ++ [ "--org" (lib.escapeShellArg cfg.org) ]
+          ++ [ "--content-view" (lib.escapeShellArg cfg.contentView) ]
           ++ [ "--lifecycle-env" cfg.lifecycleEnv ]
           ++ [ "--locus" cfg.locus ]
-          ++ [ "--flake-ref" cfg.flakeRef ]
+          ++ [ "--flake-ref" (lib.escapeShellArg cfg.flakeRef) ]
           ++ [ "--poll-interval" (toString cfg.pollInterval) ]
-          ++ [ "--store-root" cfg.storeRoot ]
+          ++ [ "--store-root" (lib.escapeShellArg cfg.storeRoot) ]
           ++ lib.optional cfg.noVerifySsl "--no-verify-ssl"
+          ++ lib.optional (cfg.signingPublicKey != "")
+               "--signing-public-key ${lib.escapeShellArg cfg.signingPublicKey}"
         );
-
-        Environment = lib.mapAttrsToList (k: v: "${k}=${v}") (
-          lib.optionalAttrs (cfg.katelloPassword != "") {
-            KATELLO_PASSWORD = cfg.katelloPassword;
-          }
-        );
-
-        LoadCredential = lib.optional (cfg.katelloPasswordFile != "")
-          "KATELLO_PASSWORD:${cfg.katelloPasswordFile}";
-
-        EnvironmentFiles = lib.optional (cfg.katelloPasswordFile != "")
-          "/run/credentials/sourceos-syncd.service/KATELLO_PASSWORD";
       };
     };
 
@@ -189,16 +200,17 @@ in
 
         ExecStart = pkgs.writeShellScript "sourceos-health-check" ''
           set -euo pipefail
-          ${defaultPackage}/bin/sourceos-syncd sync check-health \
-            --store-root ${lib.escapeShellArg cfg.storeRoot} \
-            --katello-url ${lib.escapeShellArg cfg.katelloUrl} \
-            ${lib.optionalString cfg.noVerifySsl "--no-verify-ssl"} \
-            && exit 0
+          if ${syncdPkg}/bin/sourceos-syncd sync check-health \
+              --store-root ${lib.escapeShellArg cfg.storeRoot} \
+              --katello-url ${lib.escapeShellArg cfg.katelloUrl} \
+              ${lib.optionalString cfg.noVerifySsl "--no-verify-ssl"}; then
+            exit 0
+          fi
 
           echo "sourceos-health-check: UNHEALTHY" >&2
           ${lib.optionalString cfg.healthCheck.rollbackOnFailure ''
             echo "sourceos-health-check: triggering rollback" >&2
-            ${pkgs.sourceos-boot or defaultPackage}/bin/sourceos-boot rollback execute --execute || true
+            ${bootPkg}/bin/sourceos-boot rollback execute --execute || true
           ''}
           exit 2
         '';
