@@ -151,7 +151,8 @@ DISK_FREE_GB=$(( DISK_FREE_KB / 1024 / 1024 ))
 curl -fsSL --max-time 10 https://api.github.com >/dev/null 2>&1 || \
     die "No network or GitHub unreachable — enrollment requires internet access"
 
-mkdir -p "${SOURCEOS_DIR}" && chmod 700 "${SOURCEOS_DIR}"
+mkdir -p "${SOURCEOS_DIR}" || die "Cannot create ${SOURCEOS_DIR} — check disk space and that /etc is writable"
+chmod 700 "${SOURCEOS_DIR}" || die "Cannot set permissions on ${SOURCEOS_DIR} — check that script runs as root"
 
 info "Repo root:   ${REPO_ROOT}"
 info "Host target: ${HOST}"
@@ -232,7 +233,9 @@ AGE_PUBKEY=$(age-keygen -y "${AGE_KEY}" 2>/dev/null) || \
     die "age-keygen produced empty public key from ${AGE_KEY} — key file may be corrupt.
     Regenerate: rm -f ${AGE_KEY} ${AGE_PUB} ${SECRETS_YAML} && sudo bash scripts/enroll.sh"
 # Atomic write — consistent with all other file writes in this script.
-printf '%s\n' "${AGE_PUBKEY}" > "${AGE_PUB}.tmp" && mv "${AGE_PUB}.tmp" "${AGE_PUB}"
+printf '%s\n' "${AGE_PUBKEY}" > "${AGE_PUB}.tmp" \
+    && mv "${AGE_PUB}.tmp" "${AGE_PUB}" \
+    || die "Failed to write ${AGE_PUB} — check disk space on ${SOURCEOS_DIR}"
 info "Public key: ${AGE_PUBKEY}"
 
 # If secrets.yaml already exists, verify it is decryptable with the current key.
@@ -279,7 +282,8 @@ if [[ ! -f "${COMPOSE_ENV}" ]]; then
     # install -m 600 is atomic: creates the file with correct permissions in one
     # syscall. A plain `cp` followed by `chmod 600` leaves a window where the
     # file (containing plaintext passwords) is world-readable.
-    install -m 600 "${COMPOSE_ENV_EXAMPLE}" "${COMPOSE_ENV}"
+    install -m 600 "${COMPOSE_ENV_EXAMPLE}" "${COMPOSE_ENV}" || \
+        die "install failed copying ${COMPOSE_ENV_EXAMPLE} → ${COMPOSE_ENV} — check disk space and file permissions"
     # Verify the expected keys exist before substituting — if the template
     # changes to use different key names, sed exits 0 silently with no change
     # and Foreman boots with the example placeholder passwords.
@@ -298,8 +302,9 @@ if [[ ! -f "${COMPOSE_ENV}" ]]; then
     # Atomic write: if the script is killed mid-write the file stays absent
     # rather than being empty, so a re-run regenerates it rather than reading
     # an empty password and dying on the KATELLO_PASSWORD guard below.
-    printf '%s\n' "${FOREMAN_ADMIN_PASSWORD}" > "${KATELLO_ADMIN_PW_FILE}.tmp"
-    mv "${KATELLO_ADMIN_PW_FILE}.tmp" "${KATELLO_ADMIN_PW_FILE}"
+    printf '%s\n' "${FOREMAN_ADMIN_PASSWORD}" > "${KATELLO_ADMIN_PW_FILE}.tmp" \
+        && mv "${KATELLO_ADMIN_PW_FILE}.tmp" "${KATELLO_ADMIN_PW_FILE}" \
+        || die "Failed to write ${KATELLO_ADMIN_PW_FILE} — check disk space on ${SOURCEOS_DIR}"
     ok "Generated .env"
 else
     ok ".env already exists"
@@ -464,7 +469,9 @@ else
     info "Generating minisign key pair (no passphrase)..."
     # Redirect stdin from /dev/null: if an older minisign binary ignores -W and
     # prompts for a passphrase, it receives EOF immediately instead of hanging.
-    minisign -G -p "${MINISIGN_PUB}" -s "${MINISIGN_SEC}" -W < /dev/null
+    minisign -G -p "${MINISIGN_PUB}" -s "${MINISIGN_SEC}" -W < /dev/null || \
+        die "minisign key generation failed — check disk space on ${SOURCEOS_DIR} and minisign installation.
+    Diagnose: minisign -G -p ${MINISIGN_PUB} -s ${MINISIGN_SEC} -W"
     [[ -s "${MINISIGN_PUB}" && -s "${MINISIGN_SEC}" ]] || \
         die "minisign -G exited 0 but did not produce key files — check disk space on ${SOURCEOS_DIR}"
     chmod 600 "${MINISIGN_SEC}"
@@ -483,15 +490,18 @@ info "Signing public key: ${SIGNING_PUBKEY}"
 
 # Write nix-cache-info atomically then sign it. nginx serves the .minisig file
 # alongside harmonia so sourceos-syncd can verify the cache before pulling.
-cat > "${MINISIGN_CACHE_INFO}.tmp" <<EOF
+{
+    cat > "${MINISIGN_CACHE_INFO}.tmp" <<EOF
 StoreDir: /nix/store
 WantMassQuery: 1
 Priority: 30
 EOF
+} || die "Failed to write nix-cache-info temp file — check disk space on ${SOURCEOS_DIR}"
 # Priority 30 < 40 (cache.nixos.org default) — lower number = higher priority.
 # This ensures nix prefers the local harmonia cache over the remote when both
 # are configured as substituters.
-mv "${MINISIGN_CACHE_INFO}.tmp" "${MINISIGN_CACHE_INFO}"
+mv "${MINISIGN_CACHE_INFO}.tmp" "${MINISIGN_CACHE_INFO}" || \
+    die "Failed to install nix-cache-info — check disk space on ${SOURCEOS_DIR}"
 
 minisign -S -s "${MINISIGN_SEC}" -m "${MINISIGN_CACHE_INFO}" -x "${MINISIGN_CACHE_INFO_SIG}" \
     || die "minisign signing failed. Possible causes:
