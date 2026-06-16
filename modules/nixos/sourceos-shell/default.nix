@@ -78,39 +78,67 @@ in
       ];
     };
 
+    # Services are gated on the runtime binary existing at packageRoot.
+    # They are inert before the sourceos-shell runtime package is deployed
+    # (e.g. via Katello content). Same ConditionPathExists pattern as harmonia.
+
     systemd.services.sourceos-shell = {
-      description = "SourceOS shell runtime scaffold";
+      description = "SourceOS shell runtime";
       wantedBy = [ "multi-user.target" ];
+      after = [ "network.target" ];
+      unitConfig.ConditionPathExists = "${cfg.packageRoot}/bin/sourceos-shell";
       serviceConfig = {
-        Type = "simple";
-        ExecStart = "${pkgs.coreutils}/bin/echo sourceos-shell runtime placeholder root=${cfg.packageRoot} port=${toString cfg.shellPort}";
+        Type = "exec";
+        ExecStart = "${cfg.packageRoot}/bin/sourceos-shell --port ${toString cfg.shellPort}";
+        Restart = "on-failure";
+        RestartSec = "5s";
+        DynamicUser = true;
+        BindReadOnlyPaths = [ "/etc/sourceos-shell" ];
       };
     };
 
     systemd.services.sourceos-router = {
-      description = "SourceOS shell router scaffold";
+      description = "SourceOS shell router bridge";
       wantedBy = [ "multi-user.target" ];
+      after = [ "network.target" ];
+      unitConfig.ConditionPathExists = "${cfg.packageRoot}/bin/sourceos-router";
       serviceConfig = {
-        Type = "simple";
-        ExecStart = "${pkgs.coreutils}/bin/echo sourceos-router placeholder port=${toString cfg.routerPort}";
+        Type = "exec";
+        ExecStart = "${cfg.packageRoot}/bin/sourceos-router --port ${toString cfg.routerPort}";
+        Restart = "on-failure";
+        RestartSec = "5s";
+        DynamicUser = true;
+        BindReadOnlyPaths = [ "/etc/sourceos-shell" ];
       };
     };
 
     systemd.services.sourceos-pdf-secure = {
-      description = "SourceOS shell pdf-secure scaffold";
+      description = "SourceOS shell pdf-secure service";
       wantedBy = [ "multi-user.target" ];
+      after = [ "network.target" ];
+      unitConfig.ConditionPathExists = "${cfg.packageRoot}/bin/sourceos-pdf-secure";
       serviceConfig = {
-        Type = "simple";
-        ExecStart = "${pkgs.coreutils}/bin/echo sourceos-pdf-secure placeholder port=${toString cfg.pdfSecurePort}";
+        Type = "exec";
+        ExecStart = "${cfg.packageRoot}/bin/sourceos-pdf-secure --port ${toString cfg.pdfSecurePort}";
+        Restart = "on-failure";
+        RestartSec = "5s";
+        DynamicUser = true;
+        BindReadOnlyPaths = [ "/etc/sourceos-shell" ];
       };
     };
 
     systemd.services.sourceos-docd = {
-      description = "SourceOS shell docd scaffold";
+      description = "SourceOS shell docd derive service";
       wantedBy = [ "multi-user.target" ];
+      after = [ "network.target" ];
+      unitConfig.ConditionPathExists = "${cfg.packageRoot}/bin/sourceos-docd";
       serviceConfig = {
-        Type = "simple";
-        ExecStart = "${pkgs.coreutils}/bin/echo sourceos-docd placeholder port=${toString cfg.docdPort}";
+        Type = "exec";
+        ExecStart = "${cfg.packageRoot}/bin/sourceos-docd --port ${toString cfg.docdPort}";
+        Restart = "on-failure";
+        RestartSec = "5s";
+        DynamicUser = true;
+        BindReadOnlyPaths = [ "/etc/sourceos-shell" ];
       };
     };
   };
