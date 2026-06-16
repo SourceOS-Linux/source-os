@@ -252,8 +252,11 @@ if [[ ! -f "${COMPOSE_ENV}" ]]; then
     sed -i "s|^FOREMAN_ADMIN_PASSWORD=.*|FOREMAN_ADMIN_PASSWORD=${FOREMAN_ADMIN_PASSWORD}|" "${COMPOSE_ENV}"
     sed -i "s|^KATELLO_PG_PASSWORD=.*|KATELLO_PG_PASSWORD=${KATELLO_PG_PASSWORD}|" "${COMPOSE_ENV}"
 
-    echo "${FOREMAN_ADMIN_PASSWORD}" > "${KATELLO_ADMIN_PW_FILE}"
-    chmod 600 "${KATELLO_ADMIN_PW_FILE}"
+    # Atomic write: if the script is killed mid-write the file stays absent
+    # rather than being empty, so a re-run regenerates it rather than reading
+    # an empty password and dying on the KATELLO_PASSWORD guard below.
+    printf '%s\n' "${FOREMAN_ADMIN_PASSWORD}" > "${KATELLO_ADMIN_PW_FILE}.tmp"
+    mv "${KATELLO_ADMIN_PW_FILE}.tmp" "${KATELLO_ADMIN_PW_FILE}"
     ok "Generated .env"
 else
     ok ".env already exists"
@@ -271,7 +274,7 @@ docker-compose -f "${COMPOSE_FILE}" --env-file "${COMPOSE_ENV}" up -d
 _KATELLO_RUNNING=$(docker ps --filter "name=katello" --format "{{.Names}}" 2>/dev/null | wc -l | tr -d ' ')
 [[ "${_KATELLO_RUNNING}" -ge 1 ]] || \
     die "docker compose up -d returned 0 but no katello containers are running.
-    Diagnose: docker compose -f ${COMPOSE_FILE} logs
+    Diagnose: docker-compose -f ${COMPOSE_FILE} logs
     Then retry: sudo bash scripts/enroll.sh"
 info "Containers started (${_KATELLO_RUNNING} katello container(s) running). Waiting for foreman-installer (10-15 min)..."
 info "Follow: docker-compose -f ${COMPOSE_FILE} logs -f foreman-katello"
@@ -284,7 +287,7 @@ while ! docker exec katello-foreman test -f /var/lib/foreman/.sourceos-initializ
         warn "Foreman installer still running after ${MAX_WAIT}s."
         warn "Options:"
         warn "  Watch:   docker exec katello-foreman tail -f /var/log/foreman-installer/foreman-installer.log"
-        warn "  Restart: docker compose -f ${COMPOSE_FILE} restart foreman-katello"
+        warn "  Restart: docker-compose -f ${COMPOSE_FILE} restart foreman-katello"
         warn "  Re-run:  bash scripts/enroll.sh  (will skip Foreman if already complete)"
         die  "Timed out. Increase timeout: FOREMAN_WAIT_TIMEOUT=3600 bash scripts/enroll.sh"
     fi
@@ -359,6 +362,9 @@ elif [[ -f "${HARMONIA_KEY}" || -f "${HARMONIA_PUB}" ]]; then
 else
     # nix-store --generate-binary-cache-key <name> <secret-key-file> <public-key-file>
     nix-store --generate-binary-cache-key "builder-aarch64-1" "${HARMONIA_KEY}" "${HARMONIA_PUB}"
+    [[ -s "${HARMONIA_KEY}" && -s "${HARMONIA_PUB}" ]] || \
+        die "nix-store --generate-binary-cache-key produced empty key file(s)
+        Remove and re-run: rm -f ${HARMONIA_KEY} ${HARMONIA_PUB} && sudo bash scripts/enroll.sh"
     chmod 600 "${HARMONIA_KEY}"
     ok "Generated harmonia signing key ($(elapsed))"
 fi
@@ -390,7 +396,11 @@ else
     ok "Generated ${MINISIGN_PUB} ($(elapsed))"
 fi
 
-SIGNING_PUBKEY=$(grep -v '^untrusted comment' "${MINISIGN_PUB}" | head -1)
+# `grep -v` exits 1 when every line matches the pattern (e.g. file has only
+# the comment line). With set -o pipefail that propagates into the $() and fires
+# set -e before the empty guard below can print a useful message. `|| true`
+# lets the guard handle the empty-string case with a clear diagnostic.
+SIGNING_PUBKEY=$(grep -v '^untrusted comment' "${MINISIGN_PUB}" 2>/dev/null | head -1 || true)
 [[ -n "${SIGNING_PUBKEY}" ]] || \
     die "minisign public key file is empty or malformed: ${MINISIGN_PUB}
     Delete and re-run: rm -f ${MINISIGN_PUB} ${MINISIGN_SEC} && sudo bash scripts/enroll.sh"
@@ -406,7 +416,13 @@ EOF
 mv "${MINISIGN_CACHE_INFO}.tmp" "${MINISIGN_CACHE_INFO}"
 
 minisign -S -s "${MINISIGN_SEC}" -m "${MINISIGN_CACHE_INFO}" -x "${MINISIGN_CACHE_INFO_SIG}" \
-    || die "minisign signing failed — check that ${MINISIGN_SEC} passphrase is empty"
+    || die "minisign signing failed. Possible causes:
+    - ${MINISIGN_SEC} has a passphrase (should be empty; generated with -W)
+    - ${MINISIGN_SEC} is corrupt or unreadable (check permissions/size)
+    - Disk full on ${SOURCEOS_DIR}
+    Diagnose: minisign -S -s ${MINISIGN_SEC} -m ${MINISIGN_CACHE_INFO} -x ${MINISIGN_CACHE_INFO_SIG}"
+[[ -s "${MINISIGN_CACHE_INFO_SIG}" ]] || \
+    die "minisign exited 0 but produced an empty signature file: ${MINISIGN_CACHE_INFO_SIG}"
 ok "Signed nix-cache-info → ${MINISIGN_CACHE_INFO_SIG} ($(elapsed))"
 
 # ── Step 9: Write enroll.nix (replaces old sed-patching approach) ─────────────
@@ -486,26 +502,36 @@ fi
 
 # Promote content view to stable so sourceos-syncd can pick it up
 info "Promoting content view to stable..."
-CV_VERSION=$(docker exec katello-foreman hammer \
-    --server "${KATELLO_URL}" --username "${KATELLO_USER}" --password "${KATELLO_PASSWORD}" \
-    --output json content-view version list \
-    --organization "${ORG}" --content-view "sourceos-builder-aarch64" 2>/dev/null | \
-    python3 -c "import json,sys; vs=json.load(sys.stdin); print(sorted(vs,key=lambda v:v['ID'])[-1]['Version'])" \
-    2>/dev/null || echo "")
 
-if [[ -n "${CV_VERSION}" ]]; then
-    for env in candidate stable; do
-        docker exec katello-foreman hammer \
-            --server "${KATELLO_URL}" --username "${KATELLO_USER}" --password "${KATELLO_PASSWORD}" \
-            content-view version promote \
-            --organization "${ORG}" \
-            --content-view "sourceos-builder-aarch64" \
-            --version "${CV_VERSION}" \
-            --to-lifecycle-environment "${env}" 2>/dev/null && \
-            ok "Promoted to ${env}" || info "Already at ${env} (or skipping)"
-    done
+# Verify katello-foreman is still running before hammer calls — a stopped
+# container causes docker exec to exit 1 which 2>/dev/null silently swallows,
+# making promotion failures look like "already promoted".
+if ! docker ps --filter "name=katello-foreman" --format "{{.Names}}" 2>/dev/null | grep -q katello-foreman; then
+    warn "katello-foreman container is not running — skipping CV promotion"
+    warn "  Start: docker-compose -f ${COMPOSE_FILE} up -d"
+    warn "  Then promote manually: bash scripts/promote.sh"
 else
-    warn "Could not determine CV version — promote manually after Katello sync completes"
+    CV_VERSION=$(docker exec katello-foreman hammer \
+        --server "${KATELLO_URL}" --username "${KATELLO_USER}" --password "${KATELLO_PASSWORD}" \
+        --output json content-view version list \
+        --organization "${ORG}" --content-view "sourceos-builder-aarch64" 2>/dev/null | \
+        python3 -c "import json,sys; vs=json.load(sys.stdin); print(sorted(vs,key=lambda v:v['ID'])[-1]['Version'])" \
+        2>/dev/null || echo "")
+
+    if [[ -n "${CV_VERSION}" ]]; then
+        for _promote_env in candidate stable; do
+            docker exec katello-foreman hammer \
+                --server "${KATELLO_URL}" --username "${KATELLO_USER}" --password "${KATELLO_PASSWORD}" \
+                content-view version promote \
+                --organization "${ORG}" \
+                --content-view "sourceos-builder-aarch64" \
+                --version "${CV_VERSION}" \
+                --to-lifecycle-environment "${_promote_env}" 2>/dev/null && \
+                ok "Promoted to ${_promote_env}" || info "Already at ${_promote_env} (or skipping)"
+        done
+    else
+        warn "Could not determine CV version — promote manually after Katello sync completes"
+    fi
 fi
 
 # ── Step 12: Verify ────────────────────────────────────────────────────────────
