@@ -1,234 +1,240 @@
 # SourceOS M2 Enrollment Runbook
 
-Canonical procedure for taking any Apple Silicon M2 from bare metal to a fully
-enrolled SourceOS builder node. After completing this runbook the device will:
+Canonical procedure for enrolling any Apple Silicon M2 as a SourceOS builder node.
 
-- Boot into NixOS on Asahi Linux
-- Run a local Foreman+Katello content lifecycle stack (Docker, linux/amd64 via qemu)
-- Have `sourceos-syncd` polling the local Katello `stable` env every 5 minutes
-- Auto-apply NixOS updates and emit `SyncCycleReceipt` evidence on each cycle
-- Auto-rollback via `sourceos-boot` if the post-boot health check fails
+After completion the device runs:
+- NixOS on Asahi Linux (bare-metal aarch64)
+- Foreman+Katello content lifecycle stack (Docker, linux/amd64 via qemu-user-static)
+- `harmonia` Nix binary cache at `http://127.0.0.1:8101` (nginx proxy + minisig endpoint)
+- `sourceos-syncd` polling Katello `stable` every 5 min, applying NixOS updates, emitting `SyncCycleReceipt`
+- `sourceos-boot` health-check timer auto-rolling back failed updates
 
 ---
 
 ## Prerequisites
 
-| Item | Notes |
-|------|-------|
-| M2 Mac (any model) | MacBook Pro/Air M2, Mac Mini M2, Mac Studio M2 |
-| 8 GB RAM minimum | 16 GB recommended (Foreman+Katello uses ~3 GB) |
-| 100 GB free disk | NixOS partition + Docker volumes |
-| Internet connection | Required for Asahi installer + Nix binary cache |
+| Requirement | Notes |
+|-------------|-------|
+| M2 Mac (any model) | MacBook Pro/Air/Mini/Studio M2 |
+| 16 GB RAM | Foreman+Katello uses ~3 GB; 8 GB minimum, 16 GB recommended |
+| 100 GB free disk | NixOS partition + Docker volumes + Nix store |
+| Internet | Asahi installer + Nix binary cache |
 | macOS 13.0+ | Asahi installer requires Ventura or later |
+| SSH key with GitHub access | To clone `SocioProphet/prophet-platform` (private) |
 
 ---
 
-## Phase A — Install Asahi Linux
+## Phase A — Asahi Linux install (~20 min)
 
-> **Duration: ~20 min**
+```sh
+curl https://alx.sh | sh
+```
 
-1. Open Terminal on macOS and run the Asahi installer:
-   ```sh
-   curl https://alx.sh | sh
-   ```
-2. Select **"Asahi Linux (minimal)"** — this gives you a minimal Fedora Asahi base. We replace it with NixOS in Phase B.
-3. Follow the on-screen instructions. The installer will resize the macOS partition, reboot into a recovery environment, and then reboot again into the new Linux partition.
-4. After the first Linux boot you'll have a minimal Fedora Asahi shell.
-
----
-
-## Phase B — Install NixOS on the Asahi Partition
-
-> **Duration: ~15 min**
-
-This replaces the Fedora Asahi base with NixOS using the nixos-infect method.
-
-1. In the Fedora Asahi shell, become root:
-   ```sh
-   sudo -i
-   ```
-
-2. Download and run nixos-infect:
-   ```sh
-   curl -L https://raw.githubusercontent.com/elitak/nixos-infect/master/nixos-infect | \
-     NIX_CHANNEL=nixos-unstable \
-     NO_REBOOT=1 \
-     bash 2>&1 | tee /tmp/nixos-infect.log
-   ```
-   > `NO_REBOOT=1` keeps you in the session so you can clone source-os before rebooting.
-
-3. Clone source-os into place:
-   ```sh
-   mkdir -p /opt/sourceos
-   git clone https://github.com/SociOS-Linux/source-os.git /opt/sourceos/source-os
-   ```
-
-4. Set `SOURCEOS_REPO_ROOT` and `PROPHET_PLATFORM_ROOT` for the enrollment script:
-   ```sh
-   export SOURCEOS_REPO_ROOT=/opt/sourceos/source-os
-   export PROPHET_PLATFORM_ROOT=/opt/prophet-platform
-   ```
-
-5. Reboot into NixOS:
-   ```sh
-   reboot
-   ```
+Select **"Asahi Linux (minimal)"** when prompted. The installer:
+1. Resizes the macOS partition
+2. Reboots into an Apple recovery environment to finalize
+3. Boots into minimal Fedora Asahi Linux
 
 ---
 
-## Phase C — First NixOS Boot
+## Phase B — Replace Fedora with NixOS (~15 min)
 
-After reboot you'll be in the NixOS Asahi base system. Log in as root (no password yet) or use the console.
+From the Fedora Asahi shell:
 
-1. Verify you're on NixOS:
-   ```sh
-   nixos-version
-   ```
+```sh
+sudo -i
 
-2. Verify the Asahi kernel is active:
-   ```sh
-   uname -r   # should end in -asahi or similar
-   ```
+# Install NixOS over Fedora using nixos-infect.
+# NO_REBOOT=1 keeps the session open so we can clone the repo first.
+curl -L https://raw.githubusercontent.com/elitak/nixos-infect/master/nixos-infect | \
+  NIX_CHANNEL=nixos-unstable NO_REBOOT=1 bash 2>&1 | tee /tmp/nixos-infect.log
+
+# Clone source-os before rebooting into NixOS
+mkdir -p /opt/sourceos
+git clone git@github.com:SociOS-Linux/source-os.git /opt/sourceos/source-os
+
+reboot
+```
 
 ---
 
-## Phase D — Run Enrollment Script
+## Phase C — First NixOS boot
 
-> **Duration: ~30–45 min (mostly Foreman installer)**
+Log in as root (no password on first boot). Verify:
 
-The enrollment script is fully automated. Run it once from the source-os repo:
+```sh
+nixos-version   # should show NixOS 25.05 or similar
+uname -r        # should include "asahi"
+```
+
+---
+
+## Phase D — Enrollment (~35–50 min)
+
+Run the enrollment script as root from the repo root. It is fully automated and idempotent.
 
 ```sh
 cd /opt/sourceos/source-os
 sudo SOURCEOS_REPO_ROOT=$PWD bash scripts/enroll.sh
 ```
 
-### What the script does (step by step)
+### What it does
 
-| Step | Action |
-|------|--------|
-| 0 | Preflight checks (root, NixOS, repo present) |
-| 1 | `nixos-generate-config` → `hosts/builder-aarch64/hardware-configuration.nix` |
-| 2 | `nixos-rebuild switch` pass 1 — installs Docker, age, sops, minisign |
-| 3 | Generate device age key at `/etc/sourceos/age.key` |
-| 4 | Clone prophet-platform, generate random admin passwords, `docker compose up` Foreman+Katello |
-| 5 | Run `scripts/katello-sourceos-setup.sh` — creates org, product, repos, content view |
-| 6 | Encrypt Katello password with SOPS → `/etc/sourceos/secrets.yaml` |
-| 7 | `nix build` the `builder-aarch64` closure + `nix copy` it to the local Katello Nix cache |
-| 8 | Promote content view `dev → candidate → stable` |
-| 9 | Generate minisign key pair at `/etc/sourceos/nix-cache.{pub,sec}` |
-| 10 | Patch `signingPublicKey` into `hosts/builder-aarch64/default.nix` |
-| 11 | `nixos-rebuild switch` pass 2 — live config with secrets + signing verification |
-| 12 | Verify `sourceos-syncd` is running + emitted first receipt |
+| Step | Action | Notes |
+|------|--------|-------|
+| 0 | Preflight checks | root, NixOS, repo present |
+| 1 | `nixos-generate-config` | writes `hosts/builder-aarch64/hardware-configuration.nix` (gitignored) |
+| 2 | `nixos-rebuild switch --impure` pass 1 | installs Docker, age, sops, minisign; `--impure` required so gitignored files are visible |
+| 3 | Generate age key | `/etc/sourceos/age.key` — device-specific, never leaves the machine |
+| 4 | Clone + start Foreman+Katello | `docker compose up` from `prophet-platform`; waits up to 20 min for installer |
+| 5 | Katello content setup | org, product, repos, content view via `scripts/katello-sourceos-setup.sh` |
+| 6 | Encrypt secrets | Katello password → SOPS-encrypted at `/etc/sourceos/secrets.yaml` |
+| 7 | harmonia signing key | `nix-store --generate-binary-cache-key` → `/etc/sourceos/harmonia-signing.{key,pub}` |
+| 8 | minisign key + cache signature | key pair → `/etc/sourceos/nix-cache.{pub,sec}`; signs `nix-cache-info` for nginx endpoint |
+| 9 | Write `enroll.nix` | device-specific NixOS settings: `signingPublicKey`, `trusted-public-keys`; gitignored, no Nix file patching |
+| 10 | Build + push NixOS closure | `nix build` + `nix copy` to local harmonia cache |
+| 11 | `nixos-rebuild switch --impure` pass 2 | activates harmonia, nginx, sops-decrypted secrets, signing key |
+| 12 | Verify | all systemd services active; first `SyncCycleReceipt` emitted |
 
-### Monitoring the Foreman installer (step 4)
+### Watching the Foreman installer (step 4)
 
-In a separate terminal:
+In a second terminal:
+
 ```sh
 docker compose -f /opt/prophet-platform/infra/local/docker-compose.foreman-katello.yml \
   logs -f foreman-katello
 ```
 
-The installer completes when you see `Installation complete!`. The enrollment script waits automatically.
+Installation is complete when you see `Installation complete!`. The script waits automatically (up to 20 min).
 
 ---
 
-## Phase E — Post-Enrollment Verification
+## Phase E — Verify
 
-After the script prints the success banner:
+After the enrollment banner prints:
 
 ```sh
-# Daemon running?
-systemctl status sourceos-syncd
-
-# First poll log
-journalctl -u sourceos-syncd -n 50
-
-# Last sync receipt
-sourceos-syncd receipts last
-
-# Health check
-sourceos-syncd sync check-health
+bash scripts/doctor.sh
 ```
 
-Expected first-run output from `receipts last`:
-```json
-{
-  "outcome": "applied",
-  "locus": "local",
-  "lifecycleEnv": "stable",
-  "contentView": "sourceos-builder-aarch64"
-}
+Expected: 14 green checks. Key ones:
+
+```
+✓  NixOS version                    25.05 (builder-aarch64)
+✓  Asahi kernel                     6.x.x-asahi
+✓  Docker                           3 katello containers running
+✓  Foreman+Katello API              https://127.0.0.1:8443
+✓  harmonia (Nix cache)             active
+✓  nginx (cache proxy)              active
+✓  Nix cache :8101                  http://127.0.0.1:8101
+✓  nix-cache-info minisig           signature valid
+✓  sourceos-syncd daemon            active since ...
+✓  Last sync receipt                outcome=applied, 30s ago
 ```
 
 ---
 
-## Steady-State Operation
-
-Once enrolled, the device is self-managing:
+## Steady-state operation
 
 ```
-Every 5 min:  sourceos-syncd polls Katello stable
-              → if new content view version: nix copy → nixos-rebuild → emit SyncCycleReceipt
-              → if no change: emit SyncCycleReceipt (outcome: no_change)
+Every 5 min     sourceos-syncd polls Katello stable
+                → new version: nix copy → nixos-rebuild → SyncCycleReceipt
+                → no change: SyncCycleReceipt (outcome: no_change)
 
-120s post-boot: sourceos-health-check.timer fires
-              → if healthy: no action
-              → if unhealthy: sourceos-boot rollback execute → nixos-rebuild --rollback
+120s post-boot  sourceos-health-check.timer fires
+                → healthy: no action
+                → unhealthy: sourceos-boot rollback execute → nixos-rebuild --rollback
 ```
 
-To trigger an update manually:
+**Trigger a sync immediately:**
+
 ```sh
-# Promote a new version to stable in Katello, then force a poll:
+# 1. Promote a new content view version to stable
+bash scripts/promote.sh
+
+# 2. Force the daemon to poll now
 systemctl restart sourceos-syncd
+
+# 3. Watch it apply
+journalctl -u sourceos-syncd -f
 ```
 
 ---
 
-## Credentials and Secrets
+## Architecture notes
 
-| Secret | Location | Notes |
-|--------|----------|-------|
-| Device age key | `/etc/sourceos/age.key` | Never leaves the device |
-| SOPS-encrypted secrets | `/etc/sourceos/secrets.yaml` | Encrypted with device age key |
-| Katello admin password | `/etc/sourceos/katello-admin-password` | Generated by enroll.sh |
-| Katello UI | `https://127.0.0.1:8443` | admin / see katello-admin-password |
-| minisign private key | `/etc/sourceos/nix-cache.sec` | Guards Nix cache integrity |
-| minisign public key | `/etc/sourceos/nix-cache.pub` | Embedded in NixOS config as `signingPublicKey` |
+### `--impure` requirement
 
----
+`nixos-rebuild switch` is called with `--impure` because two required files are gitignored:
 
-## Re-enrollment / Recovery
+| File | Why gitignored |
+|------|----------------|
+| `hosts/builder-aarch64/hardware-configuration.nix` | Contains device-specific UUIDs/paths |
+| `hosts/builder-aarch64/enroll.nix` | Contains device-specific keys (signingPublicKey, harmonia trusted-public-key) |
 
-If the device needs to be re-enrolled (e.g., after disk wipe):
+Without `--impure`, Nix copies the flake source to the store and strips gitignored files, making `builtins.pathExists ./enroll.nix` return `false` and the hardware config import fail.
 
-1. Repeat Phase A–C.
-2. The enrollment script is idempotent — run it again.
-3. If Docker volumes are lost, Foreman+Katello will re-initialize (re-run `katello-sourceos-setup.sh` inside the script).
-4. A new age key will be generated; re-encrypt secrets with the new key.
+### Secrets model
+
+All secrets live at `/etc/sourceos/` — outside the repo. Nothing device-specific is ever committed.
+
+| File | Content | Protected by |
+|------|---------|--------------|
+| `/etc/sourceos/age.key` | Device age private key | chmod 600, root only |
+| `/etc/sourceos/secrets.yaml` | SOPS-encrypted Katello password | age key |
+| `/etc/sourceos/harmonia-signing.key` | Nix cache signing key | chmod 600 |
+| `/etc/sourceos/nix-cache.sec` | minisign private key | chmod 600 |
+| `/etc/sourceos/katello-admin-password` | Katello admin password (plaintext) | chmod 600, root only |
+
+### harmonia + nginx
+
+harmonia serves `/nix/store` as a Nix binary cache at `127.0.0.1:8099`. nginx wraps it at `:8101` and additionally serves `GET /nix-cache-info.minisig` as a static file. sourceos-syncd fetches both the cache info and the minisig before running `nix copy` to verify the cache identity.
+
+harmonia only starts after `/etc/sourceos/harmonia-signing.key` exists (enforced via `systemd.services.harmonia.unitConfig.ConditionPathExists`).
 
 ---
 
 ## Troubleshooting
 
-### `nixos-rebuild` fails with "file not found: hardware-configuration.nix"
-Run `nixos-generate-config --show-hardware-config > hosts/builder-aarch64/hardware-configuration.nix` manually, then re-run `nixos-rebuild`.
+### `error: path 'hardware-configuration.nix' does not exist`
+Run step 1 manually: `nixos-generate-config --show-hardware-config > hosts/builder-aarch64/hardware-configuration.nix`, then retry enroll.sh.
+
+### `error: access to absolute path is forbidden in pure eval mode`
+You ran `nixos-rebuild` without `--impure`. Always use enroll.sh rather than calling nixos-rebuild directly. For manual rebuilds: `nixos-rebuild switch --flake .#builder-aarch64 --impure`.
 
 ### Foreman installer never completes
 ```sh
 docker exec katello-foreman tail -f /var/log/foreman-installer/foreman-installer.log
+# Hung on Puppet? Restart: docker compose restart foreman-katello
 ```
-If it hangs on `Puppet:`: restart the container and try again (`docker compose restart foreman-katello`).
 
-### `sourceos-syncd` fails with "certificate verify failed"
-The local Foreman uses a self-signed cert. The `noVerifySsl = true` option in `hosts/builder-aarch64/default.nix` handles this. If you changed it, revert.
+### harmonia not starting
+```sh
+systemctl status harmonia
+# "ConditionPathExists was not met" = key not yet generated
+# Run: nix-store --generate-binary-cache-key builder-aarch64-1 \
+#        /etc/sourceos/harmonia-signing.key /etc/sourceos/harmonia-signing.pub
+# Then: systemctl start harmonia
+```
 
-### `nix copy` fails
-Pulp content endpoint may not be ready. Check: `curl -v http://127.0.0.1:8101/v3/status/`. If the endpoint is missing, the Foreman installer is still running.
+### `sourceos-syncd` fails authentication
+Katello password file: `cat /etc/sourceos/katello-admin-password`. Verify it matches Foreman UI at `https://127.0.0.1:8443`.
 
 ### Rollback triggered unexpectedly
 ```sh
-sourceos-syncd receipts list   # see recent receipts
+sourceos-syncd receipts list       # recent sync history
 journalctl -u sourceos-health-check -n 50
-sourceos-boot rollback plan    # dry-run the rollback plan
+sourceos-boot rollback plan        # dry-run the rollback
 ```
+
+---
+
+## Re-enrollment
+
+The enrollment script is fully idempotent. If a step fails, fix the issue and re-run:
+
+```sh
+sudo bash scripts/enroll.sh
+```
+
+If the age key or signing keys need to be regenerated (e.g., disk wipe), delete `/etc/sourceos/` and re-run. The SOPS secrets will be re-encrypted with the new age key.

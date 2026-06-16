@@ -145,8 +145,11 @@ fi
 
 step 2 "nixos-rebuild switch — pass 1 (installs Docker, age, sops, minisign)"
 
+# --impure is required: hardware-configuration.nix and enroll.nix are gitignored
+# and therefore not copied into the Nix store. --impure lets Nix access them
+# from the working directory via builtins.pathExists and direct import.
 info "Building... (5-15 min on first run, downloads packages)"
-nixos-rebuild switch --flake "${REPO_ROOT}#${HOST}" 2>&1 | \
+nixos-rebuild switch --flake "${REPO_ROOT}#${HOST}" --impure 2>&1 | \
     grep -E '^(building|fetching|error|warning|activating)' || true
 ok "Pass 1 complete ($(elapsed))"
 
@@ -327,7 +330,7 @@ info "Closure push to harmonia will happen after pass-2 rebuild in step 11."
 step 11 "nixos-rebuild switch — pass 2 (live config: secrets, signing key, harmonia)"
 
 info "Activating final configuration..."
-nixos-rebuild switch --flake "${REPO_ROOT}#${HOST}" 2>&1 | \
+nixos-rebuild switch --flake "${REPO_ROOT}#${HOST}" --impure 2>&1 | \
     grep -E '^(building|fetching|error|warning|activating)' || true
 ok "Pass 2 complete ($(elapsed))"
 
