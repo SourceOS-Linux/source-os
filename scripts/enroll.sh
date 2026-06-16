@@ -172,7 +172,8 @@ else
     # HW_CONFIG to zero bytes before the command runs; if the command then fails,
     # the empty file remains and subsequent idempotent re-runs skip generation while
     # pass-1 nixos-rebuild fails with a confusing empty-import Nix error.
-    nixos-generate-config --show-hardware-config > "${HW_CONFIG}.tmp"
+    nixos-generate-config --show-hardware-config > "${HW_CONFIG}.tmp" || \
+        die "nixos-generate-config failed — check: journalctl -xe | tail -30"
     [[ -s "${HW_CONFIG}.tmp" ]] || die "nixos-generate-config produced empty output — check: journalctl -xe"
     mv "${HW_CONFIG}.tmp" "${HW_CONFIG}"
     ok "Generated ${HW_CONFIG} ($(elapsed))"
@@ -219,8 +220,12 @@ else
     chmod 600 "${AGE_KEY}"
     ok "Generated ${AGE_KEY} ($(elapsed))"
 fi
-AGE_PUBKEY=$(age-keygen -y "${AGE_KEY}")
-[[ -n "${AGE_PUBKEY}" ]] || die "age-keygen produced empty public key from ${AGE_KEY} — key file may be corrupt"
+AGE_PUBKEY=$(age-keygen -y "${AGE_KEY}" 2>/dev/null) || \
+    die "age-keygen -y failed — ${AGE_KEY} may be corrupt or in an unsupported format.
+    Regenerate: rm -f ${AGE_KEY} ${AGE_PUB} ${SECRETS_YAML} && sudo bash scripts/enroll.sh"
+[[ -n "${AGE_PUBKEY}" ]] || \
+    die "age-keygen produced empty public key from ${AGE_KEY} — key file may be corrupt.
+    Regenerate: rm -f ${AGE_KEY} ${AGE_PUB} ${SECRETS_YAML} && sudo bash scripts/enroll.sh"
 # Atomic write — consistent with all other file writes in this script.
 printf '%s\n' "${AGE_PUBKEY}" > "${AGE_PUB}.tmp" && mv "${AGE_PUB}.tmp" "${AGE_PUB}"
 info "Public key: ${AGE_PUBKEY}"
@@ -289,6 +294,9 @@ else
     ok ".env already exists"
 fi
 
+[[ -f "${KATELLO_ADMIN_PW_FILE}" ]] || \
+    die "Katello password file missing: ${KATELLO_ADMIN_PW_FILE}
+    Regenerate: rm -f ${COMPOSE_ENV} && sudo bash scripts/enroll.sh"
 KATELLO_PASSWORD=$(cat "${KATELLO_ADMIN_PW_FILE}")
 [[ -n "${KATELLO_PASSWORD}" ]] || \
     die "Katello password file is empty: ${KATELLO_ADMIN_PW_FILE}
@@ -314,6 +322,15 @@ info "Follow: docker-compose -f ${COMPOSE_FILE} logs -f foreman-katello"
 MAX_WAIT="${FOREMAN_WAIT_TIMEOUT:-1800}"; ELAPSED=0; INTERVAL=15
 while ! docker exec katello-foreman test -f /var/lib/foreman/.sourceos-initialized 2>/dev/null; do
     sleep $INTERVAL; ELAPSED=$((ELAPSED + INTERVAL))
+    # Detect container crash immediately — without this, a crashed container causes
+    # `docker exec ... 2>/dev/null` to silently exit non-zero and the loop counts up
+    # to MAX_WAIT (30 min) before dying with a misleading "installer is slow" message.
+    if ! docker ps --filter "name=katello-foreman" --filter "status=running" \
+            --format "{{.Names}}" 2>/dev/null | grep -q katello-foreman; then
+        die "katello-foreman container stopped unexpectedly during install.
+    Logs:    docker-compose -f ${COMPOSE_FILE} logs --tail=50 katello-foreman
+    Restart: docker-compose -f ${COMPOSE_FILE} up -d && sudo bash scripts/enroll.sh"
+    fi
     if [[ $ELAPSED -ge $MAX_WAIT ]]; then
         echo
         warn "Foreman installer still running after ${MAX_WAIT}s."
@@ -323,7 +340,7 @@ while ! docker exec katello-foreman test -f /var/lib/foreman/.sourceos-initializ
         warn "  Re-run:  bash scripts/enroll.sh  (will skip Foreman if already complete)"
         die  "Timed out. Increase timeout: FOREMAN_WAIT_TIMEOUT=3600 bash scripts/enroll.sh"
     fi
-    [[ $((ELAPSED % 60)) -eq 0 ]] && info "  foreman-installer running (${ELAPSED}s / ${MAX_WAIT}s)..."
+    [[ $((ELAPSED % 30)) -eq 0 ]] && info "  foreman-installer running (${ELAPSED}s / ${MAX_WAIT}s)..."
 done
 
 wait_for_url "${KATELLO_URL}/api/v2/status" "Foreman API" 120
@@ -543,13 +560,17 @@ if [[ $_HARM_UP -eq 1 ]]; then
     # nixos-rebuild fetched a cached derivation with a different hash. Without this,
     # the running system would not be in harmonia after enrollment.
     if [[ -n "${CURRENT_GEN}" && "${CURRENT_GEN}" != "${CLOSURE}" ]]; then
-        nix copy --to "http://127.0.0.1:8101?compression=zstd" "${CURRENT_GEN}" && \
-            ok "Active system pushed to harmonia cache" || \
+        if nix copy --to "http://127.0.0.1:8101?compression=zstd" "${CURRENT_GEN}"; then
+            ok "Active system pushed to harmonia cache"
+        else
             warn "nix copy (active gen) failed — run: nix copy --to 'http://127.0.0.1:8101?compression=zstd' ${CURRENT_GEN}"
+        fi
     fi
-    nix copy --to "http://127.0.0.1:8101?compression=zstd" "${CLOSURE}" && \
-        ok "Step-10 closure pushed to harmonia cache" || \
+    if nix copy --to "http://127.0.0.1:8101?compression=zstd" "${CLOSURE}"; then
+        ok "Step-10 closure pushed to harmonia cache"
+    else
         warn "nix copy failed — run manually: nix copy --to 'http://127.0.0.1:8101?compression=zstd' ${CLOSURE}"
+    fi
 else
     warn "harmonia not responding on :8101 after 60s — push manually after it starts"
     warn "  nix copy --to 'http://127.0.0.1:8101?compression=zstd' ${CURRENT_GEN:-${CLOSURE}}"
@@ -575,14 +596,17 @@ else
 
     if [[ -n "${CV_VERSION}" ]]; then
         for _promote_env in candidate stable; do
-            docker exec katello-foreman hammer \
-                --server "${KATELLO_URL}" --username "${KATELLO_USER}" --password "${KATELLO_PASSWORD}" \
-                content-view version promote \
-                --organization "${ORG}" \
-                --content-view "sourceos-builder-aarch64" \
-                --version "${CV_VERSION}" \
-                --to-lifecycle-environment "${_promote_env}" 2>/dev/null && \
-                ok "Promoted to ${_promote_env}" || info "Already at ${_promote_env} (or skipping)"
+            if docker exec katello-foreman hammer \
+                    --server "${KATELLO_URL}" --username "${KATELLO_USER}" --password "${KATELLO_PASSWORD}" \
+                    content-view version promote \
+                    --organization "${ORG}" \
+                    --content-view "sourceos-builder-aarch64" \
+                    --version "${CV_VERSION}" \
+                    --to-lifecycle-environment "${_promote_env}" 2>/dev/null; then
+                ok "Promoted to ${_promote_env}"
+            else
+                info "Already at ${_promote_env} (or skipping)"
+            fi
         done
     else
         warn "Could not determine CV version — promote manually after Katello sync completes"
