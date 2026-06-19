@@ -12,6 +12,7 @@ on:
       - 'tests/**'
       - 'channels/**'
       - 'builders/**'
+      - 'scripts/**'
       - '.github/workflows/nix-ci.yml'
   push:
     branches:
@@ -26,6 +27,7 @@ on:
       - 'tests/**'
       - 'channels/**'
       - 'builders/**'
+      - 'scripts/**'
       - '.github/workflows/nix-ci.yml'
 
 jobs:
