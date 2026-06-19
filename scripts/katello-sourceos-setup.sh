@@ -43,7 +43,7 @@ $HAMMER product create --organization "${ORG}" \
 # ── 3. Repositories ───────────────────────────────────────────────────────
 echo "--- repositories"
 
-# Nix binary cache (file-type repo; populated by nix copy --to http://katello)
+# aarch64: Nix binary cache (file-type; harmonia serves from local /nix/store)
 $HAMMER repository create --organization "${ORG}" \
     --product "SourceOS" \
     --name "nix-cache-aarch64-linux" \
@@ -52,15 +52,33 @@ $HAMMER repository create --organization "${ORG}" \
     --download-policy immediate \
     2>/dev/null || echo "  nix-cache-aarch64-linux: exists"
 
-# SourceOS system closure artifacts (file-type; Nix store paths exported as NAR)
+# aarch64: NixOS system closure artifacts (NAR exports from local store)
 $HAMMER repository create --organization "${ORG}" \
     --product "SourceOS" \
     --name "sourceos-closures-aarch64" \
     --content-type file \
     2>/dev/null || echo "  sourceos-closures-aarch64: exists"
 
-# ── 4. Content view ───────────────────────────────────────────────────────
-echo "--- content view"
+# x86_64: Nix binary cache
+$HAMMER repository create --organization "${ORG}" \
+    --product "SourceOS" \
+    --name "nix-cache-x86_64-linux" \
+    --content-type file \
+    --url "https://cache.nixos.org" \
+    --download-policy immediate \
+    2>/dev/null || echo "  nix-cache-x86_64-linux: exists"
+
+# x86_64: NixOS system closure artifacts
+$HAMMER repository create --organization "${ORG}" \
+    --product "SourceOS" \
+    --name "sourceos-closures-x86_64" \
+    --content-type file \
+    2>/dev/null || echo "  sourceos-closures-x86_64: exists"
+
+# ── 4. Content views ──────────────────────────────────────────────────────
+echo "--- content views"
+
+# ── aarch64 builder ──
 $HAMMER content-view create --organization "${ORG}" \
     --name "sourceos-builder-aarch64" \
     --description "SourceOS builder image content view for aarch64 (Asahi/M2)" \
@@ -78,40 +96,68 @@ $HAMMER content-view add-repository --organization "${ORG}" \
     --repository "sourceos-closures-aarch64" \
     2>/dev/null || echo "  sourceos-closures-aarch64 already in view"
 
-# Publish version 1.0 to Library — skip if any version already exists.
-# Re-running katello-sourceos-setup.sh (e.g. during enroll.sh retry) must not
-# create a new CV version: publishing is slow (1-2 min) and the extra versions
-# are noise that complicates CV_VERSION selection in subsequent steps.
-echo "--- checking content view publish state"
-EXISTING_CV_VERSIONS=$($HAMMER --output json content-view version list \
-    --organization "${ORG}" \
-    --content-view "sourceos-builder-aarch64" 2>/dev/null | \
-    python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+# ── x86_64 (shared by canary and stable/exit hosts; they track different lifecycle envs) ──
+$HAMMER content-view create --organization "${ORG}" \
+    --name "sourceos-x86_64" \
+    --description "SourceOS x86_64 image content view (canary tracks candidate env; stable/exit track stable env)" \
+    2>/dev/null || echo "  sourceos-x86_64: exists"
 
-if [[ "${EXISTING_CV_VERSIONS}" -eq 0 ]]; then
-    echo "--- publishing content view (this may take a minute)"
-    $HAMMER content-view publish --organization "${ORG}" \
-        --name "sourceos-builder-aarch64" \
-        --description "Initial publish — dev channel bootstrap"
-else
-    echo "  content view already has ${EXISTING_CV_VERSIONS} version(s) — skipping publish"
-fi
+$HAMMER content-view add-repository --organization "${ORG}" \
+    --name "sourceos-x86_64" \
+    --product "SourceOS" \
+    --repository "nix-cache-x86_64-linux" \
+    2>/dev/null || echo "  nix-cache-x86_64-linux already in view"
 
-# Promote to dev lifecycle environment (idempotent — hammer returns 0 if already promoted)
-echo "--- promoting to dev"
-CV_VERSION=$($HAMMER --output json content-view version list \
-    --organization "${ORG}" \
-    --content-view "sourceos-builder-aarch64" | python3 -c \
-    "import json,sys; vs=json.load(sys.stdin); print(sorted(vs,key=lambda v:v['ID'])[-1]['Version'])")
+$HAMMER content-view add-repository --organization "${ORG}" \
+    --name "sourceos-x86_64" \
+    --product "SourceOS" \
+    --repository "sourceos-closures-x86_64" \
+    2>/dev/null || echo "  sourceos-closures-x86_64 already in view"
 
-$HAMMER content-view version promote \
-    --organization "${ORG}" \
-    --content-view "sourceos-builder-aarch64" \
-    --version "${CV_VERSION}" \
-    --to-lifecycle-environment dev
+# ── 5. Initial publish + dev promotion (idempotent) ───────────────────────
+
+_bootstrap_cv() {
+    local cv_name="$1"
+    local desc="$2"
+
+    local existing
+    existing=$($HAMMER --output json content-view version list \
+        --organization "${ORG}" \
+        --content-view "${cv_name}" 2>/dev/null | \
+        python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+
+    if [[ "${existing}" -eq 0 ]]; then
+        echo "--- publishing ${cv_name} (this may take a minute)"
+        $HAMMER content-view publish --organization "${ORG}" \
+            --name "${cv_name}" \
+            --description "${desc}"
+    else
+        echo "  ${cv_name}: already has ${existing} version(s) — skipping publish"
+    fi
+
+    local cv_version
+    cv_version=$($HAMMER --output json content-view version list \
+        --organization "${ORG}" \
+        --content-view "${cv_name}" | python3 -c \
+        "import json,sys; vs=json.load(sys.stdin); print(sorted(vs,key=lambda v:v['ID'])[-1]['Version'])")
+
+    echo "--- promoting ${cv_name} v${cv_version} → dev"
+    $HAMMER content-view version promote \
+        --organization "${ORG}" \
+        --content-view "${cv_name}" \
+        --version "${cv_version}" \
+        --to-lifecycle-environment dev \
+        2>/dev/null || echo "  already at dev"
+}
+
+_bootstrap_cv "sourceos-builder-aarch64" "Initial publish — aarch64 dev channel bootstrap"
+_bootstrap_cv "sourceos-x86_64"          "Initial publish — x86_64 dev channel bootstrap"
 
 echo "=== Setup complete ==="
-echo "Content view 'sourceos-builder-aarch64' published and promoted to dev."
-echo "Next: nix build and push the builder-aarch64 closure:"
-echo "  nix build .#nixosConfigurations.builder-aarch64.config.system.build.toplevel"
-echo "  nix copy --to 'http://127.0.0.1:8101?compression=zstd' ./result"
+echo "Content views created and promoted to dev:"
+echo "  sourceos-builder-aarch64  (aarch64 M2/Asahi builder)"
+echo "  sourceos-x86_64           (x86_64 canary + stable + exit hosts)"
+echo ""
+echo "Next: build and push your first real closure:"
+echo "  bash scripts/build-and-push.sh                         # aarch64 builder"
+echo "  bash scripts/build-and-push.sh --host canary-x86_64   # x86_64 canary"

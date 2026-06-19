@@ -3,6 +3,7 @@
   "system": "aarch64-linux",
   "role": "builder-aarch64",
   "channel": "dev",
+  "content_view": "sourceos-builder-aarch64",
   "host_config": "hosts/builder-aarch64/default.nix",
   "profile": "profiles/linux-dev/default.nix",
   "image": "images/builder-aarch64.nix"

@@ -89,6 +89,8 @@ info "Org:          ${ORG}"
 info "Promoting to: ${TARGET_ENVS[*]}"
 [[ $DRY_RUN -eq 1 ]] && warn "DRY RUN — no changes will be made"
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 # ── Promote ───────────────────────────────────────────────────────────────────
 
 echo
@@ -108,6 +110,30 @@ for env in "${TARGET_ENVS[@]}"; do
         ok "v${CV_VERSION} → ${env}"
     else
         warn "Promotion to ${env} skipped (already at this version or previous env not promoted)"
+    fi
+
+    CHANNEL_FILE="${REPO_ROOT}/channels/${env}.json"
+    if [[ -f "${CHANNEL_FILE}" ]]; then
+        PROMOTED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        python3 - <<PYEOF
+import json
+
+path = '${CHANNEL_FILE}'
+with open(path) as f:
+    d = json.load(f)
+
+d['artifact_set'] = 'urn:srcos:cv:${CV_NAME}:${CV_VERSION}'
+d['promoted_at']  = '${PROMOTED_AT}'
+approved = d.get('approved_by', [])
+if 'promote.sh' not in approved:
+    approved.append('promote.sh')
+d['approved_by'] = approved
+
+with open(path, 'w') as f:
+    json.dump(d, f, indent=2)
+    f.write('\n')
+PYEOF
+        ok "Updated channels/${env}.json"
     fi
 done
 

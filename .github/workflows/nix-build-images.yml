@@ -1,0 +1,82 @@
+name: nix-build-images
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which config to build (or "all")'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - canary-x86_64
+          - stable-x86_64
+          - exit-x86_64
+  push:
+    branches:
+      - main
+    paths:
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'hosts/canary-x86_64/**'
+      - 'hosts/stable-x86_64/**'
+      - 'hosts/exit-x86_64/**'
+      - 'profiles/linux-candidate/**'
+      - 'profiles/linux-stable/**'
+      - 'modules/**'
+      - 'packages/**'
+      - '.github/workflows/nix-build-images.yml'
+
+jobs:
+  build:
+    name: build ${{ matrix.host }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        host:
+          - canary-x86_64
+          - stable-x86_64
+          - exit-x86_64
+        exclude:
+          - host: ${{ github.event.inputs.target != 'all' && github.event.inputs.target != 'canary-x86_64' && 'canary-x86_64' || '' }}
+          - host: ${{ github.event.inputs.target != 'all' && github.event.inputs.target != 'stable-x86_64' && 'stable-x86_64' || '' }}
+          - host: ${{ github.event.inputs.target != 'all' && github.event.inputs.target != 'exit-x86_64' && 'exit-x86_64' || '' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v14
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android
+          df -h
+
+      - name: Build ${{ matrix.host }} system toplevel
+        run: |
+          nix build \
+            .#nixosConfigurations.${{ matrix.host }}.config.system.build.toplevel \
+            --print-build-logs \
+            --show-trace \
+            2>&1 | tee /tmp/build-${{ matrix.host }}.log
+
+      - name: Report store path
+        run: |
+          STORE_PATH=$(readlink -f result)
+          echo "## ${{ matrix.host }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`${STORE_PATH}\`" >> $GITHUB_STEP_SUMMARY
+          echo "store_path=${STORE_PATH}" >> $GITHUB_OUTPUT
+        id: report
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.host }}
+          path: /tmp/build-${{ matrix.host }}.log
+          retention-days: 7

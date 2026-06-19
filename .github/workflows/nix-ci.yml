@@ -1,0 +1,107 @@
+name: nix-ci
+
+on:
+  pull_request:
+    paths:
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'hosts/**'
+      - 'modules/**'
+      - 'packages/**'
+      - 'profiles/**'
+      - 'tests/**'
+      - 'channels/**'
+      - 'builders/**'
+      - '.github/workflows/nix-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'flake.nix'
+      - 'flake.lock'
+      - 'hosts/**'
+      - 'modules/**'
+      - 'packages/**'
+      - 'profiles/**'
+      - 'tests/**'
+      - 'channels/**'
+      - 'builders/**'
+      - '.github/workflows/nix-ci.yml'
+
+jobs:
+  flake-check:
+    name: nix flake check (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v14
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - name: nix flake check
+        run: nix flake check --system x86_64-linux --no-build 2>&1 | tee /tmp/flake-check.log || true
+
+      - name: build x86_64 packages
+        run: |
+          nix build .#packages.x86_64-linux.meshd
+          nix build .#packages.x86_64-linux.meshd-linkd
+          nix build .#packages.x86_64-linux.meshd-exitd
+          nix build .#packages.x86_64-linux.sourceos-syncd
+          nix build .#packages.x86_64-linux.sourceos-boot
+
+      - name: run contract checks
+        run: |
+          nix build .#checks.x86_64-linux.canary-x86_64-smoke
+          nix build .#checks.x86_64-linux.stable-x86_64-smoke
+          nix build .#checks.x86_64-linux.exit-x86_64-smoke
+          nix build .#checks.x86_64-linux.mesh-module-contract
+          nix build .#checks.x86_64-linux.mesh-package-contract
+          nix build .#checks.x86_64-linux.sourceos-syncd-package-contract
+          nix build .#checks.x86_64-linux.sourceos-boot-package-contract
+
+      - name: validate channel JSON
+        run: |
+          python3 - <<'EOF'
+          import json, glob, sys
+
+          ok = True
+          required_fields = {"channel", "capabilities", "artifact_set", "source_rev"}
+          for path in sorted(glob.glob("channels/*.json")):
+              with open(path) as f:
+                  d = json.load(f)
+              missing = required_fields - d.keys()
+              if missing:
+                  print(f"FAIL {path}: missing fields {missing}")
+                  ok = False
+              else:
+                  print(f"OK   {path}: channel={d['channel']}")
+          sys.exit(0 if ok else 1)
+          EOF
+
+      - name: validate builder manifests
+        run: |
+          python3 - <<'EOF'
+          import json, glob, sys
+
+          ok = True
+          required = {"name", "system", "role", "channel", "content_view", "host_config"}
+          for path in sorted(glob.glob("builders/*.json")):
+              with open(path) as f:
+                  d = json.load(f)
+              missing = required - d.keys()
+              if missing:
+                  print(f"FAIL {path}: missing fields {missing}")
+                  ok = False
+              else:
+                  print(f"OK   {path}: {d['name']} cv={d['content_view']}")
+          sys.exit(0 if ok else 1)
+          EOF
+
+      - name: shellcheck scripts
+        run: |
+          sudo apt-get install -y shellcheck 2>/dev/null
+          shellcheck -S warning \
+            scripts/build-and-push.sh \
+            scripts/promote.sh \
+            scripts/katello-sourceos-setup.sh

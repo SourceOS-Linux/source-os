@@ -118,22 +118,61 @@
           ];
         };
 
-        canary-x86_64 = lib.nixosSystem {
+        canary-x86_64 =
+          let
+            pkgs-x86_64 = nixpkgs.legacyPackages.x86_64-linux;
+            syncdPkg = pkgs-x86_64.callPackage ./packages/sourceos-syncd/default.nix {
+              inherit sourceos-syncd-src;
+            };
+            bootPkg = pkgs-x86_64.callPackage ./packages/sourceos-boot/default.nix {
+              inherit sourceos-boot-src;
+            };
+          in lib.nixosSystem {
           system = "x86_64-linux";
-          specialArgs = { inherit self; };
-          modules = [ ./hosts/canary-x86_64/default.nix ];
+          specialArgs = { inherit self syncdPkg bootPkg; };
+          modules = [
+            sops-nix.nixosModules.sops
+            self.nixosModules.sourceos-syncd
+            ./hosts/canary-x86_64/default.nix
+          ];
         };
 
-        stable-x86_64 = lib.nixosSystem {
+        stable-x86_64 =
+          let
+            pkgs-x86_64 = nixpkgs.legacyPackages.x86_64-linux;
+            syncdPkg = pkgs-x86_64.callPackage ./packages/sourceos-syncd/default.nix {
+              inherit sourceos-syncd-src;
+            };
+            bootPkg = pkgs-x86_64.callPackage ./packages/sourceos-boot/default.nix {
+              inherit sourceos-boot-src;
+            };
+          in lib.nixosSystem {
           system = "x86_64-linux";
-          specialArgs = { inherit self; };
-          modules = [ ./hosts/stable-x86_64/default.nix ];
+          specialArgs = { inherit self syncdPkg bootPkg; };
+          modules = [
+            sops-nix.nixosModules.sops
+            self.nixosModules.sourceos-syncd
+            ./hosts/stable-x86_64/default.nix
+          ];
         };
 
-        exit-x86_64 = lib.nixosSystem {
+        exit-x86_64 =
+          let
+            pkgs-x86_64 = nixpkgs.legacyPackages.x86_64-linux;
+            syncdPkg = pkgs-x86_64.callPackage ./packages/sourceos-syncd/default.nix {
+              inherit sourceos-syncd-src;
+            };
+            bootPkg = pkgs-x86_64.callPackage ./packages/sourceos-boot/default.nix {
+              inherit sourceos-boot-src;
+            };
+          in lib.nixosSystem {
           system = "x86_64-linux";
-          specialArgs = { inherit self; };
-          modules = [ ./hosts/exit-x86_64/default.nix ];
+          specialArgs = { inherit self syncdPkg bootPkg; };
+          modules = [
+            sops-nix.nixosModules.sops
+            self.nixosModules.sourceos-syncd
+            ./hosts/exit-x86_64/default.nix
+          ];
         };
       };
 
