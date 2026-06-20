@@ -23,9 +23,13 @@
       url = "github:SourceOS-Linux/sourceos-boot";
       flake = false;
     };
+    nixos-generators = {
+      url = "github:nix-community/nixos-generators";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, nixos-apple-silicon, sops-nix, lampstand-src, sourceos-syncd-src, sourceos-boot-src }:
+  outputs = { self, nixpkgs, nixos-apple-silicon, sops-nix, lampstand-src, sourceos-syncd-src, sourceos-boot-src, nixos-generators }:
     let
       lib = nixpkgs.lib;
       systems = [ "x86_64-linux" "aarch64-linux" ];
@@ -49,7 +53,33 @@
             inherit sourceos-boot-src;
           };
           default = meshd;
-        });
+        } // lib.optionalAttrs (system == "x86_64-linux") (
+          let
+            syncdPkgImg = pkgs.callPackage ./packages/sourceos-syncd/default.nix { inherit sourceos-syncd-src; };
+            bootPkgImg  = pkgs.callPackage ./packages/sourceos-boot/default.nix  { inherit sourceos-boot-src;  };
+          in {
+            sourceos-image-qcow2-canary = nixos-generators.nixosGenerate {
+              system = "x86_64-linux";
+              specialArgs = { self = self; syncdPkg = syncdPkgImg; bootPkg = bootPkgImg; };
+              modules = [
+                sops-nix.nixosModules.sops
+                self.nixosModules.sourceos-syncd
+                ./images/canary-x86_64.nix
+              ];
+              format = "qcow";
+            };
+            sourceos-image-qcow2-stable = nixos-generators.nixosGenerate {
+              system = "x86_64-linux";
+              specialArgs = { self = self; syncdPkg = syncdPkgImg; bootPkg = bootPkgImg; };
+              modules = [
+                sops-nix.nixosModules.sops
+                self.nixosModules.sourceos-syncd
+                ./images/release-x86_64.nix
+              ];
+              format = "qcow";
+            };
+          }
+        ));
 
       devShells = forAllSystems (system:
         let

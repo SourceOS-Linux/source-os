@@ -1,55 +1,73 @@
+# Required GitHub secrets:
+#   GCP_WORKLOAD_IDENTITY_PROVIDER — WIF provider resource name
+#     e.g. projects/123456/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+#   GCP_SERVICE_ACCOUNT            — sourceos-ci@socioprophet-platform.iam.gserviceaccount.com
+#   KATELLO_URL                    — https://<sourceos-katello-external-ip>
+#   KATELLO_ADMIN_PASSWORD         — Foreman admin password
+#
+# GCS bucket: sourceos-artifacts-socioprophet (us-central1)
+# Run infra/gcp/setup-gcs-bucket.sh and infra/gcp/setup-wif.sh once before using this workflow.
+
 name: nix-build-images
 
 on:
   workflow_dispatch:
     inputs:
       target:
-        description: 'Which config to build (or "all")'
+        description: 'Which config to build'
         required: false
         default: 'all'
         type: choice
-        options:
-          - all
-          - canary-x86_64
-          - stable-x86_64
-          - exit-x86_64
+        options: [all, canary-x86_64, stable-x86_64, exit-x86_64, builder-aarch64]
+      promote_to:
+        description: 'Promote after build'
+        required: false
+        default: 'dev'
+        type: choice
+        options: [dev, candidate, stable]
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - 'flake.nix'
       - 'flake.lock'
-      - 'hosts/canary-x86_64/**'
-      - 'hosts/stable-x86_64/**'
-      - 'hosts/exit-x86_64/**'
-      - 'profiles/linux-candidate/**'
-      - 'profiles/linux-stable/**'
+      - 'hosts/**'
+      - 'images/**'
+      - 'profiles/**'
       - 'modules/**'
       - 'packages/**'
       - '.github/workflows/nix-build-images.yml'
 
+env:
+  GCS_BUCKET: sourceos-artifacts-socioprophet
+  GCP_PROJECT: socioprophet-platform
+
 jobs:
-  build:
+
+  build-x86_64:
     name: build ${{ matrix.host }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
-        host:
-          - canary-x86_64
-          - stable-x86_64
-          - exit-x86_64
-        exclude:
-          - host: ${{ github.event.inputs.target != 'all' && github.event.inputs.target != 'canary-x86_64' && 'canary-x86_64' || '' }}
-          - host: ${{ github.event.inputs.target != 'all' && github.event.inputs.target != 'stable-x86_64' && 'stable-x86_64' || '' }}
-          - host: ${{ github.event.inputs.target != 'all' && github.event.inputs.target != 'exit-x86_64' && 'exit-x86_64' || '' }}
+        include:
+          - host: canary-x86_64
+            image_pkg: sourceos-image-qcow2-canary
+            build_image: true
+          - host: stable-x86_64
+            image_pkg: sourceos-image-qcow2-stable
+            build_image: true
+          - host: exit-x86_64
+            image_pkg: ""
+            build_image: false
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: DeterminateSystems/nix-installer-action@v14
-
       - uses: DeterminateSystems/magic-nix-cache-action@v8
 
       - name: Free disk space
@@ -61,22 +79,229 @@ jobs:
         run: |
           nix build \
             .#nixosConfigurations.${{ matrix.host }}.config.system.build.toplevel \
-            --print-build-logs \
-            --show-trace \
-            2>&1 | tee /tmp/build-${{ matrix.host }}.log
+            --print-build-logs --show-trace \
+            2>&1 | tee /tmp/build-toplevel-${{ matrix.host }}.log
+          echo "toplevel_path=$(readlink -f result)" >> "$GITHUB_OUTPUT"
+        id: toplevel
 
-      - name: Report store path
+      - name: Build ${{ matrix.host }} qcow2 image
+        if: matrix.build_image == true
         run: |
-          STORE_PATH=$(readlink -f result)
-          echo "## ${{ matrix.host }}" >> $GITHUB_STEP_SUMMARY
-          echo "\`${STORE_PATH}\`" >> $GITHUB_STEP_SUMMARY
-          echo "store_path=${STORE_PATH}" >> $GITHUB_OUTPUT
-        id: report
+          nix build \
+            .#packages.x86_64-linux.${{ matrix.image_pkg }} \
+            --print-build-logs --show-trace \
+            2>&1 | tee /tmp/build-image-${{ matrix.host }}.log
+          IMAGE_PATH="$(readlink -f result)"
+          # nixos-generators qcow output is a directory containing the .qcow2
+          QCOW=$(find "$IMAGE_PATH" -name "*.qcow2" | head -1)
+          echo "image_path=$IMAGE_PATH" >> "$GITHUB_OUTPUT"
+          echo "qcow_path=$QCOW"        >> "$GITHUB_OUTPUT"
+        id: image
+
+      - name: Authenticate to GCP
+        if: matrix.build_image == true
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Upload qcow2 to GCS
+        if: matrix.build_image == true && steps.image.outputs.qcow_path != ''
+        uses: google-github-actions/upload-cloud-storage@v2
+        with:
+          path: ${{ steps.image.outputs.qcow_path }}
+          destination: ${{ env.GCS_BUCKET }}/images/x86_64/${{ matrix.host }}/${{ github.sha }}.qcow2
+          process_gcloudignore: false
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.host }}
+          path: /tmp/build-*.log
+          retention-days: 7
+
+      - name: Summarize
+        run: |
+          echo "## ${{ matrix.host }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "toplevel: \`${{ steps.toplevel.outputs.toplevel_path }}\`" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "${{ matrix.build_image }}" == "true" ]]; then
+            echo "qcow2: \`gs://${{ env.GCS_BUCKET }}/images/x86_64/${{ matrix.host }}/${{ github.sha }}.qcow2\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  build-aarch64:
+    name: build builder-aarch64
+    runs-on: [self-hosted, aarch64-linux, linux]
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.target == 'all' || github.event.inputs.target == 'builder-aarch64'))
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build builder-aarch64 system toplevel
+        run: |
+          nix build \
+            .#nixosConfigurations.builder-aarch64.config.system.build.toplevel \
+            --impure --print-build-logs --show-trace \
+            2>&1 | tee /tmp/build-builder-aarch64.log
+          STORE_PATH="$(readlink -f result)"
+          echo "store_path=$STORE_PATH" >> "$GITHUB_OUTPUT"
+        id: build
+
+      - name: Export NixOS closure as NAR
+        run: |
+          STORE_PATH="${{ steps.build.outputs.store_path }}"
+          NAR_FILE="/tmp/builder-aarch64-${{ github.sha }}.nar.zst"
+          nix-store --export $(nix-store -qR "$STORE_PATH") | zstd -T0 -o "$NAR_FILE"
+          echo "nar_file=$NAR_FILE" >> "$GITHUB_OUTPUT"
+        id: nar
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Upload NAR to GCS
+        uses: google-github-actions/upload-cloud-storage@v2
+        with:
+          path: ${{ steps.nar.outputs.nar_file }}
+          destination: ${{ env.GCS_BUCKET }}/closures/aarch64/builder-aarch64/${{ github.sha }}.nar.zst
+          process_gcloudignore: false
 
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log-${{ matrix.host }}
-          path: /tmp/build-${{ matrix.host }}.log
+          name: build-log-builder-aarch64
+          path: /tmp/build-builder-aarch64.log
           retention-days: 7
+
+  publish-katello:
+    name: publish to Katello
+    runs-on: ubuntu-latest
+    needs: [build-x86_64, build-aarch64]
+    if: always() && (needs.build-x86_64.result == 'success' || needs.build-aarch64.result == 'success')
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine promote target
+        id: promote
+        run: |
+          TARGET="${{ github.event.inputs.promote_to || 'dev' }}"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+
+      - name: Publish content view versions via Katello API
+        env:
+          KATELLO_URL: ${{ secrets.KATELLO_URL }}
+          KATELLO_ADMIN_PASSWORD: ${{ secrets.KATELLO_ADMIN_PASSWORD }}
+          GIT_SHA: ${{ github.sha }}
+          GIT_SHORT: ${{ github.sha != '' && format('{0}', github.sha) || 'unknown' }}
+          PROMOTE_TO: ${{ steps.promote.outputs.target }}
+        run: |
+          SHORT="${GIT_SHA:0:8}"
+          BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          publish_cv() {
+            local CV_NAME="$1"
+            echo "Publishing content view: $CV_NAME"
+            curl -sf -X POST \
+              "${KATELLO_URL}/katello/api/content_views/${CV_NAME}/publish" \
+              -u "admin:${KATELLO_ADMIN_PASSWORD}" \
+              -H "Content-Type: application/json" \
+              --insecure \
+              -d "{\"description\": \"Built from ${SHORT} at ${BUILT_AT}\"}" \
+              | python3 -c "import json,sys; d=json.load(sys.stdin); print('  CV version:', d.get('id', 'unknown'))"
+          }
+
+          # Publish by name using hammer-style Katello API
+          publish_cv_by_name() {
+            local ORG="SocioProphet"
+            local CV_NAME="$1"
+            # Get CV ID
+            CV_ID=$(curl -sf \
+              "${KATELLO_URL}/katello/api/organizations/${ORG}/content_views?search=name%3D${CV_NAME}" \
+              -u "admin:${KATELLO_ADMIN_PASSWORD}" --insecure \
+              | python3 -c "import json,sys; vs=json.load(sys.stdin)['results']; print(vs[0]['id'] if vs else '')")
+            [[ -z "$CV_ID" ]] && { echo "  CV $CV_NAME not found — skipping"; return 0; }
+            curl -sf -X POST \
+              "${KATELLO_URL}/katello/api/content_views/${CV_ID}/publish" \
+              -u "admin:${KATELLO_ADMIN_PASSWORD}" \
+              -H "Content-Type: application/json" --insecure \
+              -d "{\"description\": \"Built from ${SHORT} at ${BUILT_AT}\"}" > /dev/null
+            echo "  Published $CV_NAME (id=$CV_ID)"
+          }
+
+          publish_cv_by_name "sourceos-builder-aarch64"
+          publish_cv_by_name "sourceos-x86_64"
+
+  emit-gitrefbuild:
+    name: emit GitRefBuild record
+    runs-on: ubuntu-latest
+    needs: [publish-katello]
+    if: always() && needs.publish-katello.result == 'success'
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Emit GitRefBuild JSON
+        run: |
+          RECORD_ID="urn:srcos:git-ref-build:$(date -u +%Y%m%d)-${{ github.sha }}"
+          BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          python3 - <<EOF
+          import json
+          record = {
+            "id": "${RECORD_ID}",
+            "type": "GitRefBuild",
+            "specVersion": "2.0.0",
+            "repoUri": "https://github.com/SourceOS-Linux/source-os",
+            "gitRef": "${{ github.ref }}",
+            "gitCommit": "${{ github.sha }}",
+            "status": "succeeded",
+            "triggeredBy": "github-actions",
+            "triggeredAt": "${BUILT_AT}",
+            "completedAt": "${BUILT_AT}",
+            "outputs": [
+              {
+                "outputKind": "qcow2",
+                "artifactRef": "gs://sourceos-artifacts-socioprophet/images/x86_64/canary-x86_64/${{ github.sha }}.qcow2"
+              },
+              {
+                "outputKind": "qcow2",
+                "artifactRef": "gs://sourceos-artifacts-socioprophet/images/x86_64/stable-x86_64/${{ github.sha }}.qcow2"
+              },
+              {
+                "outputKind": "bundle",
+                "artifactRef": "gs://sourceos-artifacts-socioprophet/closures/aarch64/builder-aarch64/${{ github.sha }}.nar.zst"
+              }
+            ]
+          }
+          with open("/tmp/gitrefbuild.json", "w") as f:
+            json.dump(record, f, indent=2)
+          print(json.dumps(record, indent=2))
+          EOF
+
+      - name: Upload GitRefBuild record to GCS
+        uses: google-github-actions/upload-cloud-storage@v2
+        with:
+          path: /tmp/gitrefbuild.json
+          destination: ${{ env.GCS_BUCKET }}/records/git-ref-builds/${{ github.sha }}.json
+          process_gcloudignore: false

@@ -1,8 +1,6 @@
-{ ... }:
+{ lib, ... }:
 {
-  imports = [
-    ../hosts/stable-x86_64/default.nix
-  ];
-
-  sourceos.build.role = "stable-x86_64-image";
+  imports = [ ../hosts/stable-x86_64/default.nix ];
+  sourceos.build.role = "release-x86_64-image";
+  boot.isContainer = lib.mkForce false;
 }
