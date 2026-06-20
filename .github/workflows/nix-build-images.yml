@@ -146,6 +146,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Nix if not present
+        run: |
+          if ! command -v nix &>/dev/null; then
+            export HOME=/root
+            groupadd -r nixbld 2>/dev/null || true
+            for n in $(seq 1 32); do
+              useradd -r -g nixbld -d /var/empty -s /sbin/nologin "nixbld${n}" 2>/dev/null || true
+            done
+            curl -fsSL https://nixos.org/nix/install | sudo sh -s -- --daemon --yes
+            sudo systemctl start nix-daemon.service || true
+            sleep 5
+          fi
+          echo "extra-experimental-features = nix-command flakes" | sudo tee -a /etc/nix/nix.conf
+          sudo systemctl restart nix-daemon.service || true
+          . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh || true
+          echo "/nix/var/nix/profiles/default/bin" >> "$GITHUB_PATH"
+          nix --version
+
       - name: Build builder-aarch64 system toplevel
         run: |
           nix build \
