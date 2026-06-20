@@ -29,6 +29,8 @@ echo "[1/4] Setting hostname..."
 GCP_FQDN=$(curl -sf -H "Metadata-Flavor: Google" \
   http://metadata.google.internal/computeMetadata/v1/instance/hostname)
 hostnamectl set-hostname "$GCP_FQDN"
+# Remove any stale /etc/hosts entries from previous runs that would confuse reverse DNS
+sed -i "/katello\.sourceos\.internal/d" /etc/hosts
 echo "  Done (FQDN: ${GCP_FQDN})."
 
 # --- Repos ---
