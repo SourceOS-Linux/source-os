@@ -106,4 +106,6 @@ jobs:
           shellcheck -S warning \
             scripts/build-and-push.sh \
             scripts/promote.sh \
-            scripts/katello-sourceos-setup.sh
+            scripts/katello-sourceos-setup.sh \
+            scripts/deploy-stage2.sh \
+            scripts/install-on-device.sh

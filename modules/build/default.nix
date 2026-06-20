@@ -1,4 +1,4 @@
-{ lib, ... }:
+{ lib, config, ... }:
 {
   options.sourceos.build = {
     role = lib.mkOption {
