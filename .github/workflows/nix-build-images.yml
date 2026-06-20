@@ -219,49 +219,76 @@ jobs:
           TARGET="${{ github.event.inputs.promote_to || 'dev' }}"
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
 
-      - name: Publish content view versions via Katello API
+      - name: Publish and promote content views via Katello API
         env:
           KATELLO_URL: ${{ secrets.KATELLO_URL }}
           KATELLO_ADMIN_PASSWORD: ${{ secrets.KATELLO_ADMIN_PASSWORD }}
           GIT_SHA: ${{ github.sha }}
-          GIT_SHORT: ${{ github.sha != '' && format('{0}', github.sha) || 'unknown' }}
           PROMOTE_TO: ${{ steps.promote.outputs.target }}
         run: |
           SHORT="${GIT_SHA:0:8}"
           BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          CURL="curl -sf -u admin:${KATELLO_ADMIN_PASSWORD} --insecure -H Content-Type:application/json"
 
-          publish_cv() {
-            local CV_NAME="$1"
-            echo "Publishing content view: $CV_NAME"
-            curl -sf -X POST \
-              "${KATELLO_URL}/katello/api/content_views/${CV_NAME}/publish" \
-              -u "admin:${KATELLO_ADMIN_PASSWORD}" \
-              -H "Content-Type: application/json" \
-              --insecure \
-              -d "{\"description\": \"Built from ${SHORT} at ${BUILT_AT}\"}" \
-              | python3 -c "import json,sys; d=json.load(sys.stdin); print('  CV version:', d.get('id', 'unknown'))"
+          # Resolve org ID once (organisation name "SocioProphet" → numeric id)
+          ORG_ID=$($CURL "${KATELLO_URL}/katello/api/organizations" \
+            | python3 -c "import json,sys; rs=json.load(sys.stdin)['results']; print(next((r['id'] for r in rs if r['name']=='SocioProphet'), 1))")
+          echo "Org ID: $ORG_ID"
+
+          # Resolve target lifecycle environment ID
+          ENV_ID=$($CURL "${KATELLO_URL}/katello/api/organizations/${ORG_ID}/environments" \
+            | python3 -c "import json,sys; rs=json.load(sys.stdin)['results']; print(next((r['id'] for r in rs if r['name']=='${PROMOTE_TO}'), ''))")
+          echo "Promote-to env '${PROMOTE_TO}' id: $ENV_ID"
+
+          wait_task() {
+            local TASK_ID="$1"
+            for i in $(seq 1 60); do
+              STATE=$($CURL "${KATELLO_URL}/foreman_tasks/api/tasks/${TASK_ID}" \
+                | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('state','?'),d.get('result','?'))")
+              echo "  task $TASK_ID: $STATE"
+              case "$STATE" in
+                "stopped success") return 0 ;;
+                "stopped "*) echo "  TASK FAILED"; return 1 ;;
+              esac
+              sleep 10
+            done
+            echo "  TASK TIMED OUT"; return 1
           }
 
-          # Publish by name using hammer-style Katello API
-          publish_cv_by_name() {
-            local ORG="SocioProphet"
+          publish_and_promote() {
             local CV_NAME="$1"
-            # Get CV ID
-            CV_ID=$(curl -sf \
-              "${KATELLO_URL}/katello/api/organizations/${ORG}/content_views?search=name%3D${CV_NAME}" \
-              -u "admin:${KATELLO_ADMIN_PASSWORD}" --insecure \
+            # Look up CV ID by name
+            CV_ID=$($CURL "${KATELLO_URL}/katello/api/organizations/${ORG_ID}/content_views?search=name%3D${CV_NAME}" \
               | python3 -c "import json,sys; vs=json.load(sys.stdin)['results']; print(vs[0]['id'] if vs else '')")
-            [[ -z "$CV_ID" ]] && { echo "  CV $CV_NAME not found — skipping"; return 0; }
-            curl -sf -X POST \
-              "${KATELLO_URL}/katello/api/content_views/${CV_ID}/publish" \
-              -u "admin:${KATELLO_ADMIN_PASSWORD}" \
-              -H "Content-Type: application/json" --insecure \
-              -d "{\"description\": \"Built from ${SHORT} at ${BUILT_AT}\"}" > /dev/null
-            echo "  Published $CV_NAME (id=$CV_ID)"
+            [[ -z "$CV_ID" ]] && { echo "CV $CV_NAME not found — skipping"; return 0; }
+
+            # Publish new version
+            echo "Publishing $CV_NAME (id=$CV_ID)..."
+            PUB_TASK=$($CURL -X POST "${KATELLO_URL}/katello/api/content_views/${CV_ID}/publish" \
+              -d "{\"description\":\"Built from ${SHORT} at ${BUILT_AT}\"}" \
+              | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))")
+            [[ -z "$PUB_TASK" ]] && { echo "Publish task missing id"; return 1; }
+            wait_task "$PUB_TASK" || return 1
+
+            # Get the latest version id (highest id = just published)
+            VER_ID=$($CURL "${KATELLO_URL}/katello/api/content_view_versions?content_view_id=${CV_ID}" \
+              | python3 -c "import json,sys; vs=json.load(sys.stdin)['results']; print(sorted(vs,key=lambda v:v['id'],reverse=True)[0]['id'] if vs else '')")
+            [[ -z "$VER_ID" ]] && { echo "No version found after publish"; return 1; }
+            echo "  Latest version id=$VER_ID"
+
+            # Promote to target environment
+            if [[ -n "$ENV_ID" ]]; then
+              echo "  Promoting version $VER_ID to ${PROMOTE_TO} (env $ENV_ID)..."
+              PROMO_TASK=$($CURL -X POST "${KATELLO_URL}/katello/api/content_view_versions/${VER_ID}/promote" \
+                -d "{\"environment_ids\":[${ENV_ID}]}" \
+                | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))")
+              [[ -n "$PROMO_TASK" ]] && wait_task "$PROMO_TASK" || echo "  Promote task missing id — skipping"
+            fi
+            echo "Done: $CV_NAME"
           }
 
-          publish_cv_by_name "sourceos-builder-aarch64"
-          publish_cv_by_name "sourceos-x86_64"
+          publish_and_promote "sourceos-builder-aarch64"
+          publish_and_promote "sourceos-x86_64"
 
   emit-gitrefbuild:
     name: emit GitRefBuild record
