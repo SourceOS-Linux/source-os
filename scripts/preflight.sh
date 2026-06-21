@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
 # preflight.sh — Verify all 9 SourceOS boot-chain conditions before the 1TR step.
-# Prints a green/red checklist. Exits 1 if any check fails so you don't walk to
-# another room, do 1TR, and discover a missing EFI binary.
-#
-# Run from macOS (before 1TR):
-#   sudo bash scripts/preflight.sh
-#
-# All checks are read-only. Nothing is modified.
+# Run from macOS (before 1TR):  sudo bash scripts/preflight.sh
 
 set -uo pipefail
 
@@ -24,7 +18,7 @@ echo
 _info "SourceOS preflight — checking all 9 boot-chain conditions"
 echo
 
-# ── 1. SourceOS APFS container detectable ────────────────────────────────────
+# ── 1. SourceOS APFS container ───────────────────────────────────────────────
 
 _info "[1/9] SourceOS APFS container..."
 SOURCEOS_CS=""
@@ -39,14 +33,16 @@ else
     _fail "SourceOS APFS container not found on disk0 — Asahi step 1 not complete"
 fi
 
+# Find the System volume (not Data/Preboot/Recovery/VM) and mount it
 SYSTEM_MP=""
 if [[ -n "${SOURCEOS_CS}" ]]; then
+    # Exclude "Data" as well — the Data volume never has Finish Installation.app
     SYSTEM_DISK=$(diskutil list "${SOURCEOS_CS}" 2>/dev/null | \
-        awk '/APFS Volume/ && !/Preboot|Recovery|VM/{print $NF; exit}')
+        awk '/APFS Volume/ && !/Data|Preboot|Recovery|VM/{print $NF; exit}')
     if [[ -n "${SYSTEM_DISK}" ]]; then
         diskutil mount "${SYSTEM_DISK}" >/dev/null 2>&1 || true
         SYSTEM_MP=$(diskutil info "${SYSTEM_DISK}" 2>/dev/null | \
-            grep "Mount Point" | awk -F': +' '{print $2}' | xargs || true)
+            grep "Mount Point" | awk -F': +' '{print $2}' | xargs 2>/dev/null || true)
     fi
 fi
 
@@ -64,20 +60,19 @@ if [[ -n "${FINISH_APP_RES}" && -f "${FINISH_APP_RES}/boot.bin" ]]; then
         _fail "boot.bin is only ${_sz} bytes — too small; expected ~1.7 MB (m1n1+U-Boot)"
     fi
 else
-    _fail "boot.bin not found at ${FINISH_APP_RES}/boot.bin"
+    _fail "boot.bin not found at ${FINISH_APP_RES:-<system volume not mounted>}/boot.bin"
 fi
 
-# ── 3. boot.bin AArch64 ELF/binary magic ─────────────────────────────────────
+# ── 3. boot.bin AArch64 magic ────────────────────────────────────────────────
 
 _info "[3/9] boot.bin magic bytes (AArch64)..."
 if [[ -n "${FINISH_APP_RES}" && -f "${FINISH_APP_RES}/boot.bin" ]]; then
-    # m1n1 binary starts with the ARM64 branch instruction (0x14...) or ELF magic (0x7f 45 4c 46)
     _magic=$(xxd -l 4 "${FINISH_APP_RES}/boot.bin" 2>/dev/null | awk '{print $2$3}' | head -1 || true)
     if [[ "${_magic}" == "7f454c46" ]] || [[ "${_magic:0:2}" == "14" ]] || [[ "${_magic:0:2}" == "18" ]]; then
-        _ok "boot.bin magic looks valid (${_magic})"
+        _ok "boot.bin magic valid (${_magic})"
     else
         _warn "boot.bin magic ${_magic} — expected ELF (7f454c46) or AArch64 branch; verify manually"
-        PASS=$(( PASS + 1 ))  # warn-only, not a hard fail
+        PASS=$(( PASS + 1 ))
     fi
 else
     _fail "boot.bin not accessible — skipping magic check"
@@ -87,9 +82,9 @@ fi
 
 _info "[4/9] step2.sh present..."
 if [[ -n "${FINISH_APP_RES}" && -f "${FINISH_APP_RES}/step2.sh" ]]; then
-    _ok "step2.sh: ${FINISH_APP_RES}/step2.sh"
+    _ok "step2.sh present"
 else
-    _fail "step2.sh not found at ${FINISH_APP_RES}/step2.sh — SourceOS stub may be corrupted"
+    _fail "step2.sh not found at ${FINISH_APP_RES:-<system volume not mounted>}/step2.sh"
 fi
 
 # ── 5. EFI partition found and FAT32 ─────────────────────────────────────────
@@ -99,81 +94,82 @@ EFI_DISK=$(diskutil list disk0 | awk '/EFI-SOURC/{print $NF; exit}')
 [[ -z "${EFI_DISK}" ]] && EFI_DISK=$(diskutil list disk0 | awk '/Microsoft Basic Data/{print $NF; exit}')
 
 if [[ -n "${EFI_DISK}" ]]; then
-    _efi_fs=$(diskutil info "${EFI_DISK}" 2>/dev/null | grep "File System Personality" | awk -F': +' '{print $2}' | xargs || true)
-    if echo "${_efi_fs}" | grep -qi "fat\|msdos"; then
+    _efi_fs=$(diskutil info "${EFI_DISK}" 2>/dev/null | grep "File System Personality" | \
+        awk -F': +' '{print $2}' | xargs 2>/dev/null || true)
+    # macOS reports FAT32 as "MS-DOS FAT32", "MS-DOS", or "FAT32"
+    if echo "${_efi_fs}" | grep -qiE "fat|ms.dos"; then
         _ok "EFI partition ${EFI_DISK}: ${_efi_fs}"
     elif [[ -z "${_efi_fs}" ]]; then
         _fail "EFI partition ${EFI_DISK} has no filesystem — run: sudo bash scripts/finish-step2.sh"
     else
-        _fail "EFI partition ${EFI_DISK} has unexpected filesystem: '${_efi_fs}' (expected FAT32)"
+        _fail "EFI partition ${EFI_DISK} unexpected filesystem: '${_efi_fs}' (expected FAT32/MS-DOS)"
     fi
 else
     _fail "No EFI partition found on disk0 — run: sudo bash scripts/finish-step2.sh"
 fi
 
-# ── 6. GRUB BOOTAA64.EFI present on EFI partition ────────────────────────────
+# ── 6. GRUB BOOTAA64.EFI present ─────────────────────────────────────────────
 
 _info "[6/9] GRUB EFI/BOOT/BOOTAA64.EFI on EFI partition..."
 EFI_MP=""
 if [[ -n "${EFI_DISK}" ]]; then
     diskutil mount "${EFI_DISK}" >/dev/null 2>&1 || true
-    EFI_MP=$(diskutil info "${EFI_DISK}" 2>/dev/null | grep "Mount Point" | awk -F': +' '{print $2}' | xargs || true)
+    EFI_MP=$(diskutil info "${EFI_DISK}" 2>/dev/null | grep "Mount Point" | \
+        awk -F': +' '{print $2}' | xargs 2>/dev/null || true)
 fi
 
 if [[ -n "${EFI_MP}" && -f "${EFI_MP}/EFI/BOOT/BOOTAA64.EFI" ]]; then
     _grub_sz=$(wc -c < "${EFI_MP}/EFI/BOOT/BOOTAA64.EFI")
     _ok "BOOTAA64.EFI present ($(( _grub_sz / 1024 ))K)"
 else
-    _fail "EFI/BOOT/BOOTAA64.EFI missing from ${EFI_MP:-<unmounted>} — GRUB not deployed; run deploy-stage2.sh"
+    _fail "EFI/BOOT/BOOTAA64.EFI missing from ${EFI_MP:-<unmounted>} — run deploy-stage2.sh"
 fi
 
-# ── 7. No AppleDouble (._) files on EFI partition ────────────────────────────
+# ── 7. No AppleDouble files in EFI/BOOT (not .Trashes) ───────────────────────
 
-_info "[7/9] No AppleDouble (._) files on EFI partition..."
+_info "[7/9] No AppleDouble files in EFI/BOOT path..."
 if [[ -n "${EFI_MP}" ]]; then
-    _dotfiles=$(find "${EFI_MP}" -name '._*' 2>/dev/null || true)
+    # Only care about ._* files that U-Boot could see (EFI/ tree, not .Trashes)
+    _dotfiles=$(find "${EFI_MP}/EFI" -name '._*' 2>/dev/null || true)
     if [[ -z "${_dotfiles}" ]]; then
-        _ok "No AppleDouble files on ${EFI_MP}"
+        _ok "No AppleDouble files in EFI/ tree"
     else
-        _fail "AppleDouble files on EFI partition — U-Boot may confuse them with real binaries:"
+        _fail "AppleDouble files in EFI/ — U-Boot may confuse them:"
         echo "${_dotfiles}" | sed 's/^/       /' >&2
     fi
 else
-    _warn "[7/9] EFI partition not mounted — skipping AppleDouble check"
+    _warn "EFI not mounted — skipping AppleDouble check"
     PASS=$(( PASS + 1 ))
 fi
 
-# ── 8. iso9660 installer partition with correct label ────────────────────────
+# ── 8 & 9. iso9660 installer: use CD001 magic (diskutil won't probe MBD type) ─
 
 _info "[8/9] iso9660 installer partition (nixos-*-aarch64)..."
+# disk0s9 is "Microsoft Basic Data" type — diskutil won't report iso9660 for it.
+# Detect by CD001 magic instead; do both checks 8 and 9 together.
 ISO_DISK=$(diskutil list disk0 2>/dev/null | awk '/Microsoft Basic Data/{last=$NF} END{print last}')
-_iso_fs=$(diskutil info "${ISO_DISK:-}" 2>/dev/null | grep "File System Personality" | awk -F': +' '{print $2}' | xargs || true)
-_iso_label=$(diskutil info "${ISO_DISK:-}" 2>/dev/null | grep "Volume Name" | awk -F': +' '{print $2}' | xargs || true)
 
-if echo "${_iso_fs}" | grep -qi "iso\|9660"; then
-    if echo "${_iso_label}" | grep -qi "^nixos.*aarch64$"; then
-        _ok "Installer partition ${ISO_DISK}: iso9660, label '${_iso_label}'"
-    else
-        _fail "Installer ${ISO_DISK} is iso9660 but label is '${_iso_label}' — expected nixos-*-aarch64"
-    fi
-else
-    _fail "No iso9660 partition found on disk0 — write NixOS installer ISO to an internal partition"
-fi
-
-# ── 9. CD001 magic at iso9660 sector 16 ──────────────────────────────────────
-
-_info "[9/9] CD001 magic at iso9660 sector 16 (byte 32769)..."
+_info "[9/9] CD001 magic at iso9660 sector 16..."
 if [[ -n "${ISO_DISK}" ]]; then
-    # Sector 16 = byte 32768. Read 4096 bytes from LBA 8 (8*4096=32768) with 4096-byte alignment.
+    # LBA 8 × 4096 = byte 32768 (sector 16 of iso9660). Skip 1 byte (descriptor type), read 5 = "CD001"
     _cd001=$(dd if="/dev/r${ISO_DISK}" bs=4096 skip=8 count=1 2>/dev/null | \
-        xxd -s 1 -l 5 2>/dev/null | awk '{print $2$3}' | tr -d '\n' | head -c10 || true)
+        xxd -s 1 -l 5 2>/dev/null | awk '{print $2$3$4}' | tr -d '\n' | head -c10 || true)
     if [[ "${_cd001}" == "4344303031" ]]; then
-        _ok "CD001 magic confirmed at sector 16"
+        _ok "Installer partition ${ISO_DISK}: CD001 magic confirmed (iso9660 valid)"
+        # Also grab the volume label from the PVD (offset 40, 32 bytes)
+        _label=$(dd if="/dev/r${ISO_DISK}" bs=4096 skip=8 count=1 2>/dev/null | \
+            dd bs=1 skip=40 count=32 2>/dev/null | tr -d ' ' || true)
+        if echo "${_label}" | grep -qi "^nixos.*aarch64"; then
+            _ok "Installer label: '${_label}'"
+        else
+            _fail "Installer label '${_label}' — expected nixos-*-aarch64. Re-write the ISO."
+        fi
     else
-        _fail "CD001 magic not found (got '${_cd001}') — partition may not be a valid iso9660 image"
+        _fail "CD001 magic not found on ${ISO_DISK} (got '${_cd001}') — ISO not written or wrong partition"
     fi
 else
-    _fail "No installer partition — skipping CD001 check"
+    _fail "No Microsoft Basic Data partition on disk0 — cannot find installer partition"
+    _fail "Write the NixOS aarch64 ISO to disk0s9 first"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
