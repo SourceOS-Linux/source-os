@@ -72,6 +72,19 @@
             syncdPkgImg = pkgs.callPackage ./packages/sourceos-syncd/default.nix { inherit sourceos-syncd-src; };
             bootPkgImg  = pkgs.callPackage ./packages/sourceos-boot/default.nix  { inherit sourceos-boot-src;  };
           in {
+            # Pre-installed Desktop (GNOME) disk image — for the Agent-S GUI
+            # test harness (boot + verify the desktop) and for cloud/VM use.
+            sourceos-image-qcow2-desktop = nixos-generators.nixosGenerate {
+              system = "x86_64-linux";
+              specialArgs = { self = self; };
+              modules = [
+                self.nixosModules.desktop-gnome
+                { services.getty.autologinUser = lib.mkDefault "sourceos";
+                  users.users.sourceos.initialPassword = lib.mkDefault "sourceos"; }
+              ];
+              format = "qcow";
+            };
+
             sourceos-image-qcow2-canary = nixos-generators.nixosGenerate {
               system = "x86_64-linux";
               specialArgs = { self = self; syncdPkg = syncdPkgImg; bootPkg = bootPkgImg; };
