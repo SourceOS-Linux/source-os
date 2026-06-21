@@ -37,7 +37,62 @@ Select **"Asahi Linux (minimal)"** when prompted. The installer:
 
 ---
 
+## Phase A-alt — If you already ran Asahi step 1 but NOT step 2
+
+**Symptoms:** Device boots m1n1 but stalls at USB proxy mode (black screen with m1n1 USB gadget exposed). This means the Asahi installer step 2 (1TR) was never run, so `kmutil configure-boot` never registered the m1n1+U-Boot combined binary.
+
+**State check:** From macOS, `diskutil list` shows a 2.5 GB SourceOS APFS stub at disk0s3. The `Finish Installation.app` is present inside the SourceOS system volume. The EFI partition (disk0s4) may be unformatted (Volume Total Space = 0 B).
+
+**Fix:**
+
+```sh
+# From macOS:
+sudo bash scripts/finish-step2.sh
+```
+
+This script:
+1. Verifies `boot.bin` (m1n1+U-Boot ~1.7 MB) is present in `Finish Installation.app/Contents/Resources/`
+2. Formats the EFI partition (disk0s4) as FAT32 if it has no filesystem
+3. Prints step-by-step instructions for running step 2 from 1TR
+
+After running the script, follow the 1TR instructions it prints:
+- Shut down → hold power → startup options → select **SourceOS** → Options
+- `Finish Installation.app` launches (or run `step2.sh` from Terminal)
+- Enter macOS credentials twice (bputil + kmutil prompts)
+- Device reboots with m1n1+U-Boot registered — **proxy stall is gone**
+
+Then continue with [Phase A-usb](#phase-a-usb--nixos-installer-usb) below instead of Phase B.
+
+---
+
+## Phase A-usb — NixOS installer USB
+
+If you went through Phase A-alt (custom Asahi step 1) rather than the standard Asahi+Fedora path, you arrive at U-Boot but have no Fedora to nixos-infect. Use the NixOS installer USB instead.
+
+**Build the USB (from macOS, ~3 min + lima build):**
+
+```sh
+# Identify USB drive:
+diskutil list external physical
+
+bash scripts/deploy-stage2.sh --usb /dev/diskX
+```
+
+**Boot sequence:**
+1. Insert USB into the Mac
+2. Reboot → startup options (hold power) → select **SourceOS**
+3. U-Boot auto-boots from USB → NixOS installer (~1–2 min)
+4. Log in as root, then run:
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/SourceOS-Linux/source-os/main/scripts/install-on-device.sh | sudo bash
+   ```
+5. After reboot into SourceOS NixOS, run enroll (Phase D below)
+
+---
+
 ## Phase B — Replace Fedora with NixOS (~15 min)
+
+> **Note:** Only needed if you ran the standard Asahi installer (Phase A) and landed in Fedora. Skip to Phase C if you used Phase A-usb.
 
 From the Fedora Asahi shell:
 

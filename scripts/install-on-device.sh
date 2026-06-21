@@ -61,13 +61,28 @@ fi
 # ── Step 2: Format partitions ─────────────────────────────────────────────────
 
 if [[ "${FORMAT}" == "yes" ]]; then
+    # Detect whether EFI partition needs formatting (0-byte size = no filesystem).
+    EFI_SIZE=$(lsblk -bno SIZE "${EFI_DEV}" 2>/dev/null || blockdev --getsize64 "${EFI_DEV}" 2>/dev/null || echo "0")
+    EFI_FS=$(blkid -s TYPE -o value "${EFI_DEV}" 2>/dev/null || true)
+    FORMAT_EFI="no"
+    if [[ -z "${EFI_FS}" ]]; then
+        FORMAT_EFI="yes"
+        warn "EFI partition has no filesystem — will format as FAT32."
+    fi
+
     warn "About to FORMAT the SourceOS root and /boot partitions."
     warn "Root:  ${ROOT_DEV}"
     warn "Boot:  ${BOOT_DEV}"
-    warn "EFI will NOT be touched."
+    [[ "${FORMAT_EFI}" == "yes" ]] && warn "EFI:   ${EFI_DEV}  (FAT32 — no existing filesystem detected)"
     echo
     read -rp "Type YES to continue: " confirm
     [[ "${confirm}" == "YES" ]] || die "Aborted."
+
+    if [[ "${FORMAT_EFI}" == "yes" ]]; then
+        info "Formatting EFI (FAT32)..."
+        mkfs.vfat -F 32 -n EFI "${EFI_DEV}"
+        ok "EFI formatted"
+    fi
 
     info "Formatting root (ext4)..."
     mkfs.ext4 -L nixos "${ROOT_DEV}"
