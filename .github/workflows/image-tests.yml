@@ -12,6 +12,11 @@ on:
         required: false
         default: false
         type: boolean
+      run_arm_boot:
+        description: 'Also run aarch64 boot tests (needs a KVM-capable self-hosted ARM runner)'
+        required: false
+        default: false
+        type: boolean
   pull_request:
     paths:
       - 'profiles/**'
@@ -26,18 +31,17 @@ on:
 
 jobs:
   # ── Layer 1: deterministic boot tests (free, KVM on GitHub) ──────────────────
+  # x86_64 only: nixosTests require the `kvm` feature, and GitHub's free
+  # ubuntu-24.04-arm runners do NOT expose /dev/kvm. aarch64 boot tests run on a
+  # KVM-capable ARM host (GCP arm VM / self-hosted arm runner) — see boot-tests-arm.
   boot-tests:
-    name: boot ${{ matrix.check }} (${{ matrix.arch }})
+    name: boot ${{ matrix.check }} (x86_64)
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { arch: x86_64,  runner: ubuntu-latest,    check: edition-desktop-boot }
-          - { arch: x86_64,  runner: ubuntu-latest,    check: edition-server-boot }
-          - { arch: x86_64,  runner: ubuntu-latest,    check: edition-edge-boot }
-          - { arch: aarch64, runner: ubuntu-24.04-arm, check: edition-server-boot }
-          - { arch: aarch64, runner: ubuntu-24.04-arm, check: edition-edge-boot }
-    runs-on: ${{ matrix.runner }}
+        check: [edition-desktop-boot, edition-server-boot, edition-edge-boot]
+    runs-on: ubuntu-latest
+    env: { arch: x86_64 }
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +57,27 @@ jobs:
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true; df -h
       - name: Run boot test
         run: |
-          nix build ".#checks.${{ matrix.arch }}-linux.${{ matrix.check }}" \
+          nix build ".#checks.x86_64-linux.${{ matrix.check }}" \
+            --print-build-logs --show-trace -L
+
+  # ── aarch64 boot tests — need KVM on ARM (your GCP arm VM / self-hosted runner) ──
+  # Opt-in: GitHub's free ARM runners have no /dev/kvm, so these run on a
+  # KVM-capable self-hosted aarch64 runner when you enable run_arm_boot.
+  boot-tests-arm:
+    name: boot ${{ matrix.check }} (aarch64)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_arm_boot == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [edition-server-boot, edition-edge-boot]
+    runs-on: [self-hosted, aarch64-linux, Linux]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run boot test
+        run: |
+          . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh || true
+          nix build ".#checks.aarch64-linux.${{ matrix.check }}" \
             --print-build-logs --show-trace -L
 
   # ── Layer 2: Agent-S GUI test (opt-in, needs grounding endpoint + key) ───────
