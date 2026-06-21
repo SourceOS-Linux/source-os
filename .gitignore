@@ -10,3 +10,6 @@ hosts/**/enroll.nix
 # SOPS plaintext secrets live at /etc/sourceos/secrets.yaml (outside the repo).
 # This catches accidental staging of a plaintext secrets file.
 hosts/**/secrets.yaml
+
+# Build artifacts (binaries live in GCS, not git)
+artifacts/
