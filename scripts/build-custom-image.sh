@@ -67,6 +67,19 @@ for svc in openssh docker; do
   fi
 done
 
+# Optional users. Each becomes a normal user; groups validated against a safe set.
+USERS_NIX=""
+while IFS= read -r uname; do
+  [[ -z "$uname" ]] && continue
+  [[ "$uname" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "invalid username: $uname"
+  GROUPS_NIX=""
+  while IFS= read -r g; do
+    [[ -z "$g" ]] && continue
+    case "$g" in wheel|networkmanager|docker|video|audio) GROUPS_NIX="$GROUPS_NIX \"$g\"";; *) die "rejected group: $g";; esac
+  done < <(jq -r --arg n "$uname" '.users[]? | select(.name==$n) | .groups[]?' <<<"$SPEC")
+  USERS_NIX="$USERS_NIX users.users.\"$uname\" = { isNormalUser = true; extraGroups = [ $GROUPS_NIX ]; };"
+done < <(jq -r '.users[]?.name // empty' <<<"$SPEC")
+
 # ── Compose the per-build flake ──────────────────────────────────────────────
 mkdir -p "$WORK/build"
 cat > "$WORK/build/flake.nix" <<EOF
@@ -86,6 +99,7 @@ cat > "$WORK/build/flake.nix" <<EOF
           networking.hostName = "${HOSTNAME}";
           environment.systemPackages = [ ${PKGS_NIX} ];
           ${SERVICES_NIX}
+          ${USERS_NIX}
         })
       ];
     };
