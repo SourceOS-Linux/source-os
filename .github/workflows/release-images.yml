@@ -19,8 +19,8 @@ on:
         description: 'Release tag to build (e.g. v26.11 or v26.11.0-rc1)'
         required: true
         type: string
-      build_arm:
-        description: 'Also build ARM64 ISO + Apple Silicon (needs the self-hosted aarch64 runner — your infra)'
+      build_asahi:
+        description: 'Also build the Apple Silicon boot bundle + OS package (still maturing; needs hw validation)'
         required: false
         default: false
         type: boolean
@@ -53,30 +53,36 @@ jobs:
           nix build .#packages.x86_64-linux.sourceos-installer-iso \
             --print-build-logs --show-trace
           ISO=$(find -L result -name '*.iso' | head -1)
-          mkdir -p out && cp "$ISO" "out/$(basename "$ISO")"
-          ( cd out && sha256sum *.iso > "$(basename "$ISO").sha256" )
+          # Deterministic, stable asset name (nix names the file nixos-*.iso).
+          NAME="sourceos-installer-x86_64.iso"
+          mkdir -p out && cp "$ISO" "out/$NAME"
+          ( cd out && sha256sum "$NAME" > "$NAME.sha256" )
           ls -lh out
       - uses: actions/upload-artifact@v4
         with: { name: iso-x86_64, path: out/*, retention-days: 7 }
 
   # ── aarch64 (generic ARM64 UEFI) installer ISO ───────────────────────────────
-  # Gated: only runs when build_arm=true (needs the self-hosted aarch64 runner).
+  # Native build on GitHub's free arm64 runner (public repo) — no QEMU, no
+  # self-hosted/your infra. Builds every release alongside x86_64.
   iso-aarch64:
     name: build aarch64 ISO
-    runs-on: [self-hosted, aarch64-linux, Linux]
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 180
-    if: github.event.inputs.build_arm == 'true'
     permissions: { contents: read, id-token: write }
     steps:
       - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v14
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true; df -h
       - name: Build ISO
         run: |
-          . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh || true
           nix build .#packages.aarch64-linux.sourceos-installer-iso \
             --print-build-logs --show-trace
           ISO=$(find -L result -name '*.iso' | head -1)
-          mkdir -p out && cp "$ISO" "out/$(basename "$ISO")"
-          ( cd out && sha256sum *.iso > "$(basename "$ISO").sha256" )
+          NAME="sourceos-installer-aarch64.iso"
+          mkdir -p out && cp "$ISO" "out/$NAME"
+          ( cd out && sha256sum "$NAME" > "$NAME.sha256" )
           ls -lh out
       - uses: actions/upload-artifact@v4
         with: { name: iso-aarch64, path: out/*, retention-days: 7 }
@@ -85,15 +91,15 @@ jobs:
   # Gated: needs the self-hosted aarch64 runner.
   asahi-bundle:
     name: build Apple Silicon boot bundle
-    runs-on: [self-hosted, aarch64-linux, Linux]
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
-    if: github.event.inputs.build_arm == 'true'
+    if: github.event.inputs.build_asahi == 'true'
     permissions: { contents: read }
     steps:
       - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v14
       - name: Build m1n1 boot bundle
         run: |
-          . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh || true
           bash scripts/build-m1n1-bundle.sh out "${{ github.event.inputs.tag || github.ref_name }}"
           ( cd out && tar -czf sourceos-asahi-boot-bundle.tar.gz m1n1.macho boot.bin BOOTAA64.EFI manifest.json 2>/dev/null || \
             tar -czf sourceos-asahi-boot-bundle.tar.gz m1n1.macho manifest.json )
@@ -105,16 +111,16 @@ jobs:
   # Gated: needs the self-hosted aarch64 runner + privileged loop mount.
   asahi-package:
     name: build Apple Silicon OS package
-    runs-on: [self-hosted, aarch64-linux, Linux]
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 180
-    if: github.event.inputs.build_arm == 'true'
+    if: github.event.inputs.build_asahi == 'true'
     permissions: { contents: read }
     steps:
       - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v14
       - name: Build SourceOS Asahi OS package
         run: |
-          . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh || true
-          sudo -E bash scripts/build-asahi-package.sh out "${{ github.event.inputs.tag || github.ref_name }}" || \
+          sudo -E env "PATH=$PATH" bash scripts/build-asahi-package.sh out "${{ github.event.inputs.tag || github.ref_name }}" || \
             echo "asahi-package build failed (expected until validated on hw) — continuing"
           ls -lh out 2>/dev/null || true
       - uses: actions/upload-artifact@v4
@@ -129,7 +135,7 @@ jobs:
     name: publish release
     runs-on: ubuntu-latest
     needs: [iso-x86_64, iso-aarch64, asahi-bundle, asahi-package]
-    if: always() && needs.iso-x86_64.result == 'success'
+    if: always() && (needs.iso-x86_64.result == 'success' || needs.iso-aarch64.result == 'success')
     permissions: { contents: write, id-token: write }
     steps:
       - uses: actions/checkout@v4
@@ -148,13 +154,8 @@ jobs:
         run: |
           mkdir -p release
           find dist -type f -exec cp {} release/ \;
-          # Stable versionless aliases so https://.../releases/latest/download/<name>
-          # resolves regardless of the version embedded in the real filename.
-          for arch in x86_64 aarch64; do
-            src=$(find release -name "sourceos-*-installer-${arch}-linux.iso" | head -1)
-            [ -n "$src" ] && cp "$src" "release/sourceos-installer-${arch}.iso"
-            [ -f "${src}.sha256" ] && cp "${src}.sha256" "release/sourceos-installer-${arch}.iso.sha256"
-          done
+          # Asset names are already stable+versionless (sourceos-installer-<arch>.iso),
+          # so https://.../releases/latest/download/<name> resolves across versions.
           ls -lh release
 
       - name: Template installer_data.json for this release

@@ -138,11 +138,13 @@
 
       nixosModules = {
         sourceos-syncd = import ./modules/nixos/sourceos-syncd/default.nix;
-        # Reusable GNOME desktop profile for end-user installs. The public
-        # installer (scripts/install-image.sh) composes this with a freshly
-        # generated hardware-configuration.nix on the target machine, so no
-        # per-machine hardware config is committed here.
-        desktop-gnome = import ./profiles/desktop-gnome/default.nix;
+        # Public edition profiles. The installer (scripts/install-image.sh
+        # --edition) composes one of these with a freshly generated
+        # hardware-configuration.nix on the target — no per-machine config is
+        # committed here. All build on profiles/base (no syncd/Katello/sops).
+        desktop-gnome = import ./profiles/desktop-gnome/default.nix;  # Desktop edition (GNOME)
+        server        = import ./profiles/server/default.nix;          # Server edition (headless)
+        edge          = import ./profiles/edge/default.nix;            # Edge/appliance edition (mesh-ready)
       };
 
       nixosConfigurations = {

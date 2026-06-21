@@ -11,17 +11,31 @@
 # for you to type the disk name to confirm.
 #
 # Usage (run as root in the SourceOS live installer):
-#   sudo install-image.sh                 # interactive: pick from a list
-#   sudo install-image.sh /dev/nvme0n1    # non-interactive target
+#   sudo install-image.sh                              # interactive disk pick, desktop edition
+#   sudo install-image.sh /dev/nvme0n1                 # target disk, desktop edition
+#   sudo install-image.sh --edition server /dev/sda    # server edition
+#   sudo install-image.sh --edition edge   /dev/sda    # edge/appliance edition
 #
 # Env overrides: FLAKE_REF (default github:SourceOS-Linux/source-os),
-#                MODULE (default desktop-gnome), HOSTNAME (default sourceos).
+#                HOSTNAME (default sourceos).
 set -euo pipefail
 
 FLAKE_REF="${FLAKE_REF:-github:SourceOS-Linux/source-os}"
-MODULE="${MODULE:-desktop-gnome}"
 TARGET_HOSTNAME="${HOSTNAME:-sourceos}"
 MNT=/mnt
+
+# ── Edition → flake module ────────────────────────────────────────────────────
+EDITION="desktop"
+case "${1:-}" in
+  --edition) EDITION="${2:?--edition needs a value: desktop|server|edge}"; shift 2 ;;
+esac
+case "$EDITION" in
+  desktop) MODULE="desktop-gnome" ;;
+  server)  MODULE="server" ;;
+  edge)    MODULE="edge" ;;
+  *) echo "Unknown edition '$EDITION' (use: desktop | server | edge)" >&2; exit 1 ;;
+esac
+MODULE="${MODULE_OVERRIDE:-$MODULE}"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 ok()   { printf "  ${GREEN}✓${NC}  %s\n" "$*"; }
@@ -55,7 +69,7 @@ echo
 warn "About to ERASE ${TARGET} (${SIZE}) and install SourceOS:"
 echo  "      1. New GPT label"
 echo  "      2. ESP   512 MiB  FAT32  → /boot"
-echo  "      3. Root  rest      ext4   → /   (GNOME desktop)"
+echo  "      3. Root  rest      ext4   → /   (${EDITION} edition)"
 echo
 read -rp "  Type the disk name ('${TARGET}') to confirm: " CONFIRM
 [[ "$CONFIRM" == "$TARGET" ]] || die "Confirmation did not match. Aborted — nothing changed."
