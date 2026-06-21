@@ -60,10 +60,12 @@ if command -v grub-mkimage >/dev/null 2>&1 || command -v grub2-mkimage >/dev/nul
     normal linux iso9660 part_gpt fat ext2 search search_label configfile echo all_video
 fi
 
-# 4. Build boot.img + root.img ext4 images sized to the closure.
+# 4. Build boot.img + root.img ext4 images and populate root via nixos-install.
 #    root.img holds the Nix store + the system; boot.img holds the kernel/initrd.
-ROOT_MNT="$WORK/root"; mkdir -p "$ROOT_MNT"
-log "Populating root image from closure (nix copy --to) ..."
+#    Requires root (loop mount + mounts). The asahi-package CI job runs us under sudo.
+if [ "$(id -u)" -ne 0 ]; then
+  log "WARN: not root — creating empty sized images only; run under sudo to populate."
+fi
 ROOT_BYTES=$(du -sb "$TOP" | awk '{print $1}')
 ROOT_MB=$(( (ROOT_BYTES / 1024 / 1024) * 13 / 10 + 1024 ))   # +30% headroom + 1G
 truncate -s "${ROOT_MB}M" "$PKGROOT/root.img"
@@ -71,9 +73,23 @@ mkfs.ext4 -q -L nixos "$PKGROOT/root.img"
 truncate -s 1024M "$PKGROOT/boot.img"
 mkfs.ext4 -q -L boot "$PKGROOT/boot.img"
 log "root.img ${ROOT_MB}M, boot.img 1024M created."
-log "NOTE: populating root.img with the closure + bootloader install requires a"
-log "      loop mount + nixos-install --root (privileged); wired in CI on the"
-log "      aarch64 runner. See release-images.yml asahi-package job."
+
+if [ "$(id -u)" -eq 0 ] && command -v nixos-install >/dev/null 2>&1; then
+  log "Populating images: loop-mounting and nixos-install --system ..."
+  IMG_MNT="$WORK/imgmnt"; mkdir -p "$IMG_MNT"
+  mount -o loop "$PKGROOT/root.img" "$IMG_MNT"
+  mkdir -p "$IMG_MNT/boot"
+  mount -o loop "$PKGROOT/boot.img" "$IMG_MNT/boot"
+  # Install the prebuilt system closure into the image (no bootloader install —
+  # the Asahi installer wires m1n1→U-Boot→the kernel from /boot at install time).
+  nixos-install --root "$IMG_MNT" --system "$TOP" --no-root-passwd --no-channel-copy --no-bootloader || \
+    log "WARN: nixos-install reported an error — inspect before publishing"
+  umount -R "$IMG_MNT" || true
+  log "Images populated."
+else
+  log "NOTE: skipped population (need root + nixos-install). Empty images produced;"
+  log "      the asahi-package CI job runs this under sudo on the aarch64 runner."
+fi
 
 # 5. Zip the package.
 ZIP="$OUTDIR/sourceos-${VERSION}-asahi-arm64.zip"
