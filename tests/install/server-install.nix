@@ -47,11 +47,26 @@ pkgs.testers.runNixOSTest {
     installer = { config, pkgs, lib, modulesPath, ... }: {
       imports = [ (modulesPath + "/profiles/installation-device.nix") ];
 
-      virtualisation.emptyDiskImages = [ 1024 ]; # /dev/vdb = installer root
+      virtualisation.emptyDiskImages = [ 2048 ]; # /dev/vdb = installer root
       virtualisation.rootDevice = "/dev/vdb";
       virtualisation.diskSize = 8192;            # /dev/vda = blank install target
       virtualisation.memorySize = 3072;
       virtualisation.cores = 2;
+
+      # /dev/vdb starts blank — auto-format it as the installer's root so the
+      # installer environment boots. systemd initrd uses autoFormat; the classic
+      # initrd path mke2fs's it in postDeviceCommands.
+      virtualisation.fileSystems."/".autoFormat = config.boot.initrd.systemd.enable;
+      boot.initrd.extraUtilsCommands = lib.mkIf (!config.boot.initrd.systemd.enable) ''
+        copy_bin_and_libs ${pkgs.e2fsprogs}/bin/mke2fs
+      '';
+      boot.initrd.postDeviceCommands = lib.mkIf (!config.boot.initrd.systemd.enable) ''
+        FSTYPE=$(blkid -o value -s TYPE /dev/vdb || true)
+        PARTTYPE=$(blkid -o value -s PTTYPE /dev/vdb || true)
+        if test -z "$FSTYPE" -a -z "$PARTTYPE"; then
+            mke2fs -t ext4 /dev/vdb
+        fi
+      '';
 
       # No network in the sandbox: the target closure must already be present.
       # It is seeded read-only via the shared host store (extraDependencies).
