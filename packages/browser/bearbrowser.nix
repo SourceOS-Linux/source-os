@@ -70,6 +70,10 @@ stdenv.mkDerivation rec {
 
   dontConfigure = true;
   dontBuild = true;
+  # The prebuilt dist ships build-tree symlinks (dependentlibs.list, application.ini,
+  # nsinstall, …) pointing at Mozilla source paths absent from the release tarball.
+  # We delete the dangling ones below; this disables the hook in case any remain.
+  dontCheckForBrokenSymlinks = true;
 
   installPhase = ''
     runHook preInstall
@@ -77,6 +81,9 @@ stdenv.mkDerivation rec {
     # Stage the Gecko dist under libexec, expose a wrapped launcher on PATH.
     mkdir -p "$out/libexec/bearbrowser" "$out/bin" "$out/share/applications" "$out/share/pixmaps"
     cp -r bin/* "$out/libexec/bearbrowser/"
+
+    # Drop dangling build-tree symlinks (dev artifacts; no runtime purpose).
+    find "$out/libexec/bearbrowser" -xtype l -delete
 
     # The executable is named "bearbrowser" (--with-app-name=bearbrowser).
     makeWrapper "$out/libexec/bearbrowser/bearbrowser" "$out/bin/bearbrowser" \
