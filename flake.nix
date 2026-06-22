@@ -43,6 +43,7 @@
           meshd = pkgs.callPackage ./packages/mesh/meshd.nix { };
           meshd-linkd = pkgs.callPackage ./packages/mesh/meshd-linkd.nix { };
           meshd-exitd = pkgs.callPackage ./packages/mesh/meshd-exitd.nix { };
+          bearbrowser = pkgs.callPackage ./packages/browser/bearbrowser.nix { };
           lampstand = pkgs.callPackage ./packages/search/lampstand.nix {
             inherit lampstand-src;
           };
