@@ -44,8 +44,10 @@ jobs:
     permissions: { contents: read, id-token: write }
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v14
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android; df -h
       - name: Build ISO
@@ -71,8 +73,10 @@ jobs:
     permissions: { contents: read, id-token: write }
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v14
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true; df -h
       - name: Build ISO
@@ -97,7 +101,10 @@ jobs:
     permissions: { contents: read }
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v14
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
       - name: Build m1n1 boot bundle
         run: |
           bash scripts/build-m1n1-bundle.sh out "${{ github.event.inputs.tag || github.ref_name }}"
@@ -117,7 +124,10 @@ jobs:
     permissions: { contents: read }
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v14
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
       - name: Build SourceOS Asahi OS package
         run: |
           sudo -E env "PATH=$PATH" bash scripts/build-asahi-package.sh out "${{ github.event.inputs.tag || github.ref_name }}" || \

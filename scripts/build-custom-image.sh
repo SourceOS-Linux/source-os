@@ -132,11 +132,13 @@ EOF
 log "composed build: target=$TARGET edition=$EDITION arch=$ARCH host=$HOSTNAME pkgs=[$(jq -rc '.packages // []' <<<"$SPEC")]"
 
 # ── Build ────────────────────────────────────────────────────────────────────
+CACHE_PATHS=()   # store paths to push to the Nix binary cache (warms later builds)
 if [[ "$TARGET" == "iso" ]]; then
   log "nix build install-iso (long step)..."
   nix build --no-link --print-out-paths \
     "$WORK/build#packages.${ARCH}-linux.image" --print-build-logs > "$WORK/outpath" || die "nix build failed"
   RESULT="$(cat "$WORK/outpath")"
+  CACHE_PATHS+=("$RESULT")
   # NB: the store path itself ends in `.iso` but is a DIRECTORY (iso/ inside);
   # match files only, first hit, no pipe (avoids matching the dir + SIGPIPE).
   ISO="$(find -L "$RESULT" -type f -name '*.iso' -print -quit)"
@@ -149,6 +151,7 @@ elif [[ "$TARGET" == "netboot" ]]; then
   log "nix build netboot kernel + initramfs (long step)..."
   base="$WORK/build#nixosConfigurations.netboot.config.system.build"
   KDIR="$(nix build --no-link --print-out-paths "$base.kernel" --print-build-logs)" || die "kernel build failed"
+  CACHE_PATHS+=("$KDIR")
   KERNEL="$(find -L "$KDIR" -type f \( -name 'bzImage' -o -name 'Image' \) -print -quit)"
   [[ -n "$KERNEL" ]] || die "no kernel found in $KDIR"
   RAMDISK_DIR="$(nix build --no-link --print-out-paths "$base.netbootRamdisk")" || die "ramdisk build failed"
@@ -183,5 +186,11 @@ if [[ -n "$GCS_PREFIX" ]]; then
     echo "$GCS_PREFIX/netboot-manifest.json" > "$OUT/artifact-url.txt"
     log "netboot base URL: $GCS_PREFIX/"
   fi
+fi
+
+# ── Warm the Nix binary cache (best-effort; no-op without NIX_CACHE_* env) ─────
+if [[ "${#CACHE_PATHS[@]}" -gt 0 ]]; then
+  _selfdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  bash "$_selfdir/nix-cache-push.sh" "${CACHE_PATHS[@]}" || true
 fi
 log "done."

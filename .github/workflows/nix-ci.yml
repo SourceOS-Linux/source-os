@@ -37,9 +37,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: DeterminateSystems/nix-installer-action@v14
-
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
 
       - name: nix flake check
         run: nix flake check --system x86_64-linux --no-build 2>&1 | tee /tmp/flake-check.log || true

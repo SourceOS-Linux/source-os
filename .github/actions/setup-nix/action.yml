@@ -1,0 +1,36 @@
+name: setup-nix
+description: >
+  Install Nix (Determinate) and, if the SourceOS GCS binary cache is configured,
+  add it as a substituter. Replaces the sunset magic-nix-cache-action. Graceful:
+  with no cache vars set it just installs Nix (falls back to cache.nixos.org).
+inputs:
+  cache-url:
+    description: "Public HTTPS base of the GCS Nix cache, e.g. https://storage.googleapis.com/<bucket>/nix-cache"
+    required: false
+    default: ""
+  cache-pubkey:
+    description: "Trusted public key for the cache (form name:base64). Pair with the push secret."
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Compose nix extra-conf (cache substituter, if configured)
+      id: conf
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.cache-url }}" ] && [ -n "${{ inputs.cache-pubkey }}" ]; then
+          {
+            echo 'extra-conf<<NIXEOF'
+            echo "extra-substituters = ${{ inputs.cache-url }}"
+            echo "extra-trusted-public-keys = ${{ inputs.cache-pubkey }}"
+            echo 'NIXEOF'
+          } >> "$GITHUB_OUTPUT"
+          echo "[setup-nix] GCS cache substituter enabled"
+        else
+          echo 'extra-conf=' >> "$GITHUB_OUTPUT"
+          echo "[setup-nix] no cache vars — using cache.nixos.org only"
+        fi
+    - uses: DeterminateSystems/nix-installer-action@v14
+      with:
+        extra-conf: ${{ steps.conf.outputs.extra-conf }}

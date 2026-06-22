@@ -37,8 +37,10 @@ jobs:
     permissions: { contents: read, id-token: write }
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@v14
-      - uses: DeterminateSystems/magic-nix-cache-action@v8
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
       - name: Free disk space
         run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true; df -h
 
@@ -56,6 +58,9 @@ jobs:
 
       - name: Build custom image
         id: build
+        env:
+          NIX_CACHE_BUCKET: ${{ vars.NIX_CACHE_BUCKET }}
+          NIX_CACHE_SECRET_KEY: ${{ secrets.NIX_CACHE_SECRET_KEY }}
         run: |
           PREFIX="gs://${GCS_BUCKET}/user-builds/${{ github.event.inputs.uid }}/${{ github.event.inputs.build_id }}"
           printf '%s' '${{ github.event.inputs.spec }}' > /tmp/spec.json
