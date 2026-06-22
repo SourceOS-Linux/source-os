@@ -18,21 +18,34 @@ in the meantime.
   (using the workflow's existing WIF GCP auth). `build-custom-image.sh` calls it
   after every build, so both the GitHub and GCP build lanes seed the cache.
 
+> **Status (2026-06-22): this is already provisioned.** The cache lives in a
+> **dedicated** public bucket `gs://sourceos-nix-cache-socioprophet` (NOT the
+> artifacts bucket, which holds private `user-builds/` and stays private). The
+> Actions vars/secrets below are set, and the keys are stored locally in
+> `~/.sourceos-keys/`. The steps remain here for rotation / re-provisioning.
+
 ## One-time setup
 1. **Generate a cache key pair** (ed25519, Nix's own format):
    ```sh
    nix-store --generate-binary-cache-key sourceos-nix-cache-1 cache-secret.key cache-public.key
    cat cache-public.key   # e.g. sourceos-nix-cache-1:AbC123...=
    ```
-2. **Make the cache prefix public-read** (pull is anonymous HTTPS):
+2. **Use a DEDICATED public bucket** — never make the artifacts bucket public
+   (it contains private user builds). Create one and make only it public-read:
    ```sh
-   gsutil iam ch allUsers:objectViewer gs://sourceos-artifacts-socioprophet
-   # (or scope a bucket policy to the nix-cache/ prefix)
+   gcloud storage buckets create gs://sourceos-nix-cache-socioprophet \
+     --location=us-central1 --uniform-bucket-level-access
+   gcloud storage buckets add-iam-policy-binding gs://sourceos-nix-cache-socioprophet \
+     --member=allUsers --role=roles/storage.objectViewer
+   # let the CI service account push closures:
+   gcloud storage buckets add-iam-policy-binding gs://sourceos-nix-cache-socioprophet \
+     --member=serviceAccount:sourceos-ci@socioprophet-platform.iam.gserviceaccount.com \
+     --role=roles/storage.objectAdmin
    ```
 3. **Set repo Actions variables** (Settings → Secrets and variables → Actions → Variables):
-   - `NIX_CACHE_URL` = `https://storage.googleapis.com/sourceos-artifacts-socioprophet/nix-cache`
+   - `NIX_CACHE_URL` = `https://storage.googleapis.com/sourceos-nix-cache-socioprophet/nix-cache`
    - `NIX_CACHE_PUBKEY` = the `sourceos-nix-cache-1:…` line from step 1
-   - `NIX_CACHE_BUCKET` = `sourceos-artifacts-socioprophet`
+   - `NIX_CACHE_BUCKET` = `sourceos-nix-cache-socioprophet`
 4. **Set the push secret** (Settings → Secrets → Actions → Secrets):
    - `NIX_CACHE_SECRET_KEY` = contents of `cache-secret.key`
 5. Optional but recommended — **seed the editions** once so the first user
