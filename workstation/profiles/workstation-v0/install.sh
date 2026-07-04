@@ -3,6 +3,7 @@ set -euo pipefail
 
 PROFILE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MANIFEST="$PROFILE_DIR/manifest.yaml"
+ROOT_DIR="$(cd "$PROFILE_DIR/../.." && pwd)"
 
 err() { printf "ERROR: %s\n" "$*" >&2; }
 info() { printf "INFO: %s\n" "$*" >&2; }
@@ -11,8 +12,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 os_id() {
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    echo "macos"
-    return
+    echo "macos"; return
   fi
   if [[ -r /etc/os-release ]]; then
     . /etc/os-release
@@ -23,7 +23,6 @@ os_id() {
 }
 
 install_brew() {
-  # We do not auto-run remote scripts here. We require brew to be preinstalled.
   err "Homebrew not found. Install Homebrew first, then re-run." 
   err "macOS: https://brew.sh (inspect before running)"
   err "Linuxbrew: https://docs.brew.sh/Homebrew-on-Linux"
@@ -37,7 +36,6 @@ install_user_brew_packages() {
 
   info "Installing USER packages via brew (manifest-driven)."
 
-  # NOTE: minimal parser: extract lines under 'brew:' and '- ' entries.
   awk '
     $0 ~ /^\s*brew:\s*$/ {in=1; next}
     in && $0 ~ /^\s*- / {gsub(/^\s*- /, ""); print; next}
@@ -82,6 +80,17 @@ install_shell_spine() {
   fi
 }
 
+install_cli() {
+  local cli="$ROOT_DIR/workstation/bin/install-cli.sh"
+  if [[ -x "$cli" ]]; then
+    info "Installing sourceos CLI to ~/.local/bin"
+    "$cli"
+  else
+    err "CLI installer missing: $cli"
+    return 1
+  fi
+}
+
 main() {
   if [[ ! -f "$MANIFEST" ]]; then
     err "manifest not found: $MANIFEST"
@@ -91,6 +100,7 @@ main() {
   install_system_packages
   install_user_brew_packages
   install_shell_spine
+  install_cli
 
   info "Workstation profile install complete (v0)."
   info "Next: run doctor: $PROFILE_DIR/doctor.sh"
