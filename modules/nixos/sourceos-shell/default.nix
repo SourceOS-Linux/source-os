@@ -63,6 +63,21 @@ in
       searchProvider.linuxFileProvider=${cfg.searchProvider.linuxFileProvider}
     '';
 
+    environment.etc."sourceos-shell/pdf-stack.json".text = builtins.toJSON {
+      derive = {
+        service = "sourceos-docd";
+        port = cfg.docdPort;
+      };
+      secure = {
+        service = "sourceos-pdf-secure";
+        port = cfg.pdfSecurePort;
+      };
+      invariants = [
+        "artifact_manifest_required"
+        "signed_and_validation_reports_flow_from_runtime"
+      ];
+    };
+
     environment.etc."sourceos-shell/search-provider.json".text = builtins.toJSON {
       mode = cfg.searchProvider.mode;
       linuxFileProvider = cfg.searchProvider.linuxFileProvider;

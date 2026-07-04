@@ -300,6 +300,7 @@
           mesh-host-runtime-contract = import ./tests/mesh-host-runtime-contract.nix { inherit pkgs; };
           sourceos-shell-module-contract = import ./tests/sourceos-shell-module-contract.nix { inherit pkgs; };
           sourceos-shell-pdf-stack-contract = import ./tests/sourceos-shell-pdf-stack-contract.nix { inherit pkgs; };
+          sourceos-shell-pdf-config-contract = import ./tests/sourceos-shell-pdf-config-contract.nix { inherit pkgs; };
 
           meshd-package = self.packages.${system}.meshd;
           meshd-linkd-package = self.packages.${system}.meshd-linkd;
