@@ -1,0 +1,13 @@
+# SourceOS Workstation Spine (Zsh)
+
+# SourceOS shell spine (Zsh)
+# Safe to source multiple times.
+
+SOURCEOS_SPINE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/sourceos/shell"
+
+if [[ -f "$SOURCEOS_SPINE_DIR/common.sh" ]]; then
+  source "$SOURCEOS_SPINE_DIR/common.sh"
+fi
+
+# Zsh-specific keybindings can be added here without affecting bash.
+# Example: bindkey '^R' atuin-search is handled by atuin init.

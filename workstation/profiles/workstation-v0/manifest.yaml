@@ -1,0 +1,123 @@
+apiVersion: sourceos.workstation/v0
+kind: WorkstationProfile
+metadata:
+  name: workstation-v0
+  description: >-
+    CLI-first GNOME workstation profile for CoreOS/Silverblue-derived systems.
+    Focus: keyboard-first, modern terminal toolchain, Albert action surface.
+  compatibility:
+    os:
+      - fedora
+      - fedora-silverblue
+      - fedora-coreos
+      - rhel-coreos
+      - macos
+spec:
+  layers:
+    system:
+      description: >-
+        Minimal host dependencies. Keep this small on immutable hosts.
+      packages:
+        # NOTE: On rpm-ostree systems these are layered and may require reboot.
+        rpm_ostree:
+          - git
+          - openssh-clients
+          - podman
+          - toolbox
+          - wl-clipboard
+          - jq
+        dnf:
+          - git
+          - openssh-clients
+          - podman
+          - toolbox
+          - wl-clipboard
+          - jq
+
+    user:
+      description: >-
+        Developer toolchain and shell UX. Prefer userland package managers for parity.
+      packages:
+        brew:
+          # Navigation / shell UX
+          - fzf
+          - atuin
+          - bat
+          - zoxide
+          - yazi
+          - eza
+          - gum
+          - direnv
+          - tldr
+          - fd
+          - ripgrep
+
+          # Git
+          - lazygit
+          - gh
+          - diff-so-fancy
+          - tig
+          - svu
+
+          # Process / ops
+          - tmux
+          - mprocs
+          - lazydocker
+          - k9s
+          - btop
+
+          # JSON
+          - jnv
+          - gojq
+          - fx
+          - jless
+          - jqp
+
+          # Disk
+          - dua-cli
+          - dust
+          - kondo
+
+          # Markdown/Docs
+          - glow
+
+          # Bench
+          - hyperfine
+
+          # File motion
+          - rclone
+          - minio-mc
+          - rsync
+
+        # Optional / platform-specific tooling can be resolved by installer
+        # and may not exist on every package backend.
+
+    toolbox:
+      description: >-
+        Isolated build surface for AUR/source builds. Treated as untrusted.
+      packages:
+        arch:
+          - base-devel
+          - git
+          - yay
+
+  desktop:
+    gnome:
+      description: >-
+        GNOME customization is behavioral (extensions + GSettings) not core forks.
+      inputs:
+        kinto:
+          enabled: true
+          note: "Kinto is X11-centric; Wayland support requires validation." 
+        fusuma:
+          enabled: true
+          note: "Gestures via libinput; validate hardware compatibility." 
+
+  launcher:
+    albert:
+      description: >-
+        Albert is the action bus / command palette. Do not duplicate GNOME file indexing.
+      plugin:
+        id: sourceos
+        trigger: "sourceos "
+
