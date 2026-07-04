@@ -1,0 +1,13 @@
+[Unit]
+Description=SourceOS shell docd scaffold
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env sh -c 'echo sourceos-docd placeholder'
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

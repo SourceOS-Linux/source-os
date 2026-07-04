@@ -14,8 +14,10 @@ spec:
         - wl-clipboard
         - jq
         - xclip
-        # launcher (Wayland-first)
         - fuzzel
+        - input-remapper
+        - sushi
+        - gnome-screenshot
       dnf:
         - git
         - openssh-clients
@@ -24,8 +26,10 @@ spec:
         - wl-clipboard
         - jq
         - xclip
-        # launcher (Wayland-first)
         - fuzzel
+        - input-remapper
+        - sushi
+        - gnome-screenshot
     user:
       brew:
         - fzf
@@ -62,6 +66,7 @@ spec:
         - kondo
         - glow
         - hyperfine
+        - pipx
         - rclone
         - minio-mc
         - rsync
@@ -70,12 +75,22 @@ spec:
   desktop:
     gnome:
       inputs:
-        kinto:
+        primary_backend:
+          name: input-remapper
+          rationale: "Packaged on Fedora and works across X11/Wayland at evdev layer"
+        compatibility_backends:
+          - name: xremap
+            rationale: "MIT, app-specific remapping, GNOME Wayland compatible"
+          - name: kinto
+            rationale: "X11/xkeysnail compatibility lane for mac-style shortcuts"
+        gestures:
+          name: fusuma
           enabled: true
-          note: "X11-centric; validate Wayland or use keyd/xremap"
-        fusuma:
-          enabled: true
-          note: "libinput gestures; validate hardware"
+          rationale: "MIT multitouch gesture recognizer using libinput"
+      mac_polish:
+        quicklook: sushi
+        screenshots: gnome-screenshot
+        screenshot_dir: "~/Pictures/Screenshots"
   launcher:
     palette:
       primary: fuzzel
@@ -84,3 +99,10 @@ spec:
         - rofi
       trigger: "<Super>space"
       command: "sourceos palette"
+    search:
+      file_backend: lampstand
+      invariant: no_redundant_file_search
+      authority: sourceos-search
+      notes:
+        - "Lampstand is the Linux-native file search backend."
+        - "The launcher remains an action bus and must not perform a second file-search pass."

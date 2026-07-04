@@ -3,6 +3,7 @@
   "system": "x86_64-linux",
   "role": "stable-x86_64",
   "channel": "stable",
+  "content_view": "sourceos-x86_64",
   "host_config": "hosts/stable-x86_64/default.nix",
   "profile": "profiles/linux-stable/default.nix",
   "image": "images/release-x86_64.nix"

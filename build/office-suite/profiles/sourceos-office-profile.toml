@@ -1,0 +1,30 @@
+profile_id = "sourceos-office-profile-v1"
+status = "draft"
+default_editor = "libreoffice"
+cloud_editor = "collabora"
+workspace_runtime = "prophet-platform"
+workspace_domain = "prophet-workspace"
+
+default_modes = ["sovereign", "interoperability", "migration", "cloud"]
+
+[formats]
+canonical = "ODF"
+interop = "OOXML"
+fixed_output = "PDF"
+
+[desktop]
+file_associations = true
+font_substitution = true
+templates = true
+local_extraction = true
+roundtrip_smoke = true
+
+[cloud]
+wopi_handoff = true
+versioned_saveback = true
+receipt_required = true
+
+[policy]
+macro_default = "disabled"
+external_templates = "warn"
+model_access = "policy-gated"

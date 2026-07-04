@@ -1,0 +1,23 @@
+{
+  "repo": "SourceOS-Linux/source-os",
+  "domain": "image-build",
+  "specVersion": "0.1.0",
+  "ownedSchemas": [],
+  "syncEngines": [],
+  "sourceChannels": [],
+  "policyClasses": [
+    "critical"
+  ],
+  "auditEvents": [
+    "image.build.started",
+    "image.build.completed",
+    "image.build.failed",
+    "image.nix.eval"
+  ],
+  "dangerousSurfaces": [
+    "image.efi_vars_mutable",
+    "image.hardware_config.committed",
+    "image.substitute_trusted_override"
+  ],
+  "notes": "NixOS flake for SourceOS builder images. Phase 0: Apple Silicon (Asahi Linux) via M2 MacBook. hardware-configuration.nix is device-specific and must be generated on-device with nixos-generate-config."
+}

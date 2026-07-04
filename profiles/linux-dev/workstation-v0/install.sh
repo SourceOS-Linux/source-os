@@ -18,15 +18,16 @@ autopatch_enabled(){
 }
 
 install_system(){
+  local packages=(git openssh-clients podman toolbox wl-clipboard jq xclip sushi gnome-screenshot)
   if have rpm-ostree; then
-    info "rpm-ostree detected: installing minimal SYSTEM layer (may require reboot)"
-    sudo rpm-ostree install git openssh-clients podman toolbox wl-clipboard jq xclip || true
+    info "rpm-ostree detected: installing SYSTEM layer (may require reboot)"
+    sudo rpm-ostree install "${packages[@]}" || true
     info "If new packages were layered, reboot before continuing."
     return
   fi
   if have dnf; then
-    info "dnf detected: installing minimal SYSTEM layer"
-    sudo dnf install -y git openssh-clients podman toolbox wl-clipboard jq xclip || true
+    info "dnf detected: installing SYSTEM layer"
+    sudo dnf install -y "${packages[@]}" || true
     return
   fi
   err "No rpm-ostree/dnf found; cannot apply SYSTEM layer"
@@ -58,8 +59,11 @@ install_shell_spine(){
   local dst="${XDG_CONFIG_HOME:-$HOME/.config}/sourceos/shell"
   mkdir -p "$dst"
   cp -f "$PROFILE_DIR/shell/common.sh" "$dst/common.sh"
-  info "shell spine installed: $dst/common.sh"
-  info "Enable by sourcing it from your shell rc (zshrc/bashrc)."
+  if [[ -f "$PROFILE_DIR/shell/common.fish" ]]; then
+    cp -f "$PROFILE_DIR/shell/common.fish" "$dst/common.fish"
+  fi
+  info "shell spine installed: $dst"
+  info "Enable by sourcing it from your shell rc or use the autopatch helpers."
 }
 
 install_sourceos_cli(){
@@ -72,8 +76,25 @@ install_sourceos_cli(){
   fi
 }
 
+install_lampstand_backend(){
+  local script="$PROFILE_DIR/bin/install-lampstand.sh"
+  if [[ -x "$script" ]]; then
+    info "Installing Lampstand backend (best-effort)"
+    "$script" || warn "Lampstand install failed (non-fatal)"
+  else
+    warn "Lampstand installer not found: $script"
+  fi
+}
+
 patch_shell_rc_if_enabled(){
   if ! autopatch_enabled; then
+    return 0
+  fi
+
+  local all_script="$PROFILE_DIR/bin/patch-all.sh"
+  if [[ -x "$all_script" ]]; then
+    info "Autopatch enabled: applying composite shell/fish patch helper"
+    "$all_script" apply || warn "composite patch helper failed (non-fatal)"
     return 0
   fi
 
@@ -85,7 +106,6 @@ patch_shell_rc_if_enabled(){
     warn "autopatch enabled but patch helper missing: $sh_script"
   fi
 
-  # Optional: patch fish config if present.
   local fish_script="$PROFILE_DIR/bin/patch-fish.sh"
   if [[ -x "$fish_script" ]]; then
     info "Autopatch enabled: patching fish config (if present)"
@@ -113,6 +133,56 @@ apply_gnome_extensions(){
   fi
 }
 
+apply_gnome_appearance(){
+  local script="$PROFILE_DIR/gnome/appearance-apply.sh"
+  if [[ -f "$script" ]]; then
+    info "Applying GNOME appearance defaults (best-effort)"
+    bash "$script" || warn "GNOME appearance defaults failed (non-fatal)"
+  else
+    warn "GNOME appearance script not found: $script"
+  fi
+}
+
+apply_files_sidebar(){
+  local script="$PROFILE_DIR/gnome/files-sidebar.sh"
+  if [[ -f "$script" ]]; then
+    info "Applying Files sidebar defaults (best-effort)"
+    bash "$script" || warn "Files sidebar defaults failed (non-fatal)"
+  else
+    warn "Files sidebar script not found: $script"
+  fi
+}
+
+apply_input_install(){
+  local script="$PROFILE_DIR/gnome/input-install.sh"
+  if [[ -x "$script" ]]; then
+    info "Installing input remap lane (best-effort)"
+    "$script" || warn "input lane install failed (non-fatal)"
+  else
+    warn "input install script not found: $script"
+  fi
+}
+
+apply_fusuma_install(){
+  local script="$PROFILE_DIR/gnome/fusuma-install.sh"
+  if [[ -x "$script" ]]; then
+    info "Installing fusuma gesture lane (best-effort)"
+    "$script" || warn "fusuma install failed (non-fatal)"
+  else
+    warn "fusuma install script not found: $script"
+  fi
+}
+
+apply_fusuma_config(){
+  local script="$PROFILE_DIR/gnome/fusuma-apply.sh"
+  if [[ -x "$script" ]]; then
+    info "Applying fusuma defaults (best-effort)"
+    "$script" || warn "fusuma apply failed (non-fatal)"
+  else
+    warn "fusuma apply script not found: $script"
+  fi
+}
+
 apply_launcher_install(){
   local script="$PROFILE_DIR/gnome/launcher-install.sh"
   if [[ -x "$script" ]]; then
@@ -133,17 +203,34 @@ apply_palette_hotkey(){
   fi
 }
 
+apply_mac_defaults(){
+  local script="$PROFILE_DIR/gnome/mac-defaults.sh"
+  if [[ -x "$script" ]]; then
+    info "Applying mac-like GNOME defaults pack (best-effort)"
+    "$script" || warn "mac defaults pack failed (non-fatal)"
+  else
+    warn "mac defaults script not found: $script"
+  fi
+}
+
 main(){
   [[ -f "$MANIFEST" ]] || { err "manifest missing: $MANIFEST"; exit 2; }
   install_system
   install_user
   install_shell_spine
   install_sourceos_cli
+  install_lampstand_backend
   patch_shell_rc_if_enabled
   apply_gnome_baseline
   apply_gnome_extensions
+  apply_gnome_appearance
+  apply_files_sidebar
+  apply_input_install
+  apply_fusuma_install
+  apply_fusuma_config
   apply_launcher_install
   apply_palette_hotkey
+  apply_mac_defaults
   info "installed workstation-v0 (linux-dev)"
   info "next: ./doctor.sh"
 }

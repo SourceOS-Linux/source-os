@@ -3,6 +3,7 @@
   imports = [
     ../../modules/build/default.nix
     ../../modules/nixos/mesh/default.nix
+    ../../modules/nixos/sourceos-shell/default.nix
   ];
 
   sourceos.build = {

@@ -1,0 +1,32 @@
+{
+  "context": {
+    "call_id": "00000000-0000-0000-0000-000000000000",
+    "plane": "Audit",
+    "policy_digest": "sha256:cafebabe"
+  },
+  "authorization": {
+    "grant_id": "cap-1",
+    "target_id": "urn:srcos:session:s001"
+  },
+  "quarantine": {
+    "subject_id": "urn:srcos:session:s001",
+    "isolation_mode": "cgroup-ebpf",
+    "allow_dns": "10.7.0.1",
+    "allow_hosts": [
+      "audit.example.org"
+    ]
+  },
+  "anchor": {
+    "entry_hash": "sha256:example-entry-hash",
+    "root": "sha256:example-root",
+    "path": "/tmp/triune-flow-audit.ndjson"
+  },
+  "quorum": {
+    "votes": [
+      { "signer": "validator@v1", "verdict": "reseal_resume" },
+      { "signer": "validator@v2", "verdict": "reseal_resume" },
+      { "signer": "watchdog@w1", "verdict": "terminate" }
+    ],
+    "majority_verdict": "reseal_resume"
+  }
+}

@@ -1,0 +1,47 @@
+name: workstation-shortcut-map
+
+on:
+  pull_request:
+    paths:
+      - 'docs/workstation/shortcut-map.md'
+      - 'profiles/linux-dev/workstation-v0/bin/check-shortcut-map-contract.sh'
+      - '.github/workflows/workstation-shortcut-map.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/workstation/shortcut-map.md'
+      - 'profiles/linux-dev/workstation-v0/bin/check-shortcut-map-contract.sh'
+      - '.github/workflows/workstation-shortcut-map.yml'
+
+jobs:
+  shortcut-map-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check shortcut map helper
+        run: |
+          set -euo pipefail
+          bash -n profiles/linux-dev/workstation-v0/bin/check-shortcut-map-contract.sh
+
+      - name: Smoke: shortcut map contract helper reports required markers
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/check-shortcut-map-contract.sh'
+          out=$(bash "$helper")
+          grep -F 'shortcut_map=present' <<<"$out" >/dev/null
+          grep -F 'active_palette=present' <<<"$out" >/dev/null
+          grep -F 'active_files=present' <<<"$out" >/dev/null
+          grep -F 'active_terminal=present' <<<"$out" >/dev/null
+          grep -F 'active_screenshot_screen=present' <<<"$out" >/dev/null
+          grep -F 'active_screenshot_area=present' <<<"$out" >/dev/null
+          grep -F 'active_screenshot_ui=present' <<<"$out" >/dev/null
+          grep -F 'active_screenshot_folder=present' <<<"$out" >/dev/null
+          grep -F 'compatibility_input_remapper=present' <<<"$out" >/dev/null
+          grep -F 'compatibility_xremap=present' <<<"$out" >/dev/null
+          grep -F 'compatibility_kinto=present' <<<"$out" >/dev/null
+          grep -F 'planned_marker=present' <<<"$out" >/dev/null
+          grep -F 'non_goal_marker=present' <<<"$out" >/dev/null
+          grep -F 'boundary_marker=present' <<<"$out" >/dev/null
