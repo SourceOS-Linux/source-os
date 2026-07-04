@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# SourceOS workstation CLI (v0)
+# NOTE: This is intentionally dependency-light (bash + coreutils).
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROFILES_DIR="$ROOT_DIR/profiles"
+
+usage() {
+  cat <<'EOF'
+sourceos - SourceOS workstation helper
+
+Usage:
+  sourceos profile list
+  sourceos profile apply <profile>
+  sourceos doctor [<profile>]
+
+Notes:
+  - This CLI is the implementation surface. Design/RFCs live in SociOS-Linux/enhancements.
+  - Typed contract boundaries live in SourceOS-Linux/sourceos-spec.
+EOF
+}
+
+err() { printf "ERROR: %s\n" "$*" >&2; }
+info() { printf "INFO: %s\n" "$*" >&2; }
+
+profile_list() {
+  if [[ ! -d "$PROFILES_DIR" ]]; then
+    err "profiles directory not found: $PROFILES_DIR"
+    exit 2
+  fi
+  (cd "$PROFILES_DIR" && ls -1)
+}
+
+profile_apply() {
+  local profile=${1:-}
+  [[ -n "$profile" ]] || { err "profile name required"; usage; exit 2; }
+  local dir="$PROFILES_DIR/$profile"
+  local installer="$dir/install.sh"
+  [[ -x "$installer" ]] || { err "installer not found or not executable: $installer"; exit 2; }
+  exec "$installer"
+}
+
+doctor() {
+  local profile=${1:-workstation-v0}
+  local dir="$PROFILES_DIR/$profile"
+  local doc="$dir/doctor.sh"
+  [[ -x "$doc" ]] || { err "doctor not found or not executable: $doc"; exit 2; }
+  exec "$doc"
+}
+
+main() {
+  local cmd=${1:-}
+  case "$cmd" in
+    -h|--help|help|"")
+      usage
+      ;;
+    profile)
+      shift
+      local sub=${1:-}
+      case "$sub" in
+        list)
+          profile_list
+          ;;
+        apply)
+          shift
+          profile_apply "${1:-}"
+          ;;
+        *)
+          err "unknown profile subcommand: $sub"
+          usage
+          exit 2
+          ;;
+      esac
+      ;;
+    doctor)
+      shift
+      doctor "${1:-workstation-v0}"
+      ;;
+    *)
+      err "unknown command: $cmd"
+      usage
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

@@ -304,6 +304,48 @@ check_lampstand_unit(){
   esac
 }
 
+check_workstation_polish(){
+  local helper="$(cd "$(dirname "$0")" && pwd)/bin/check-workstation-polish.sh"
+  local out policy_ok
+
+  if [[ ! -f "$helper" ]]; then
+    warn "workstation polish helper missing: $helper"
+    record_result warn workstation-polish-helper "missing"
+    return
+  fi
+
+  if ! out="$(bash "$helper" 2>/dev/null)"; then
+    warn "workstation polish helper failed"
+    record_result warn workstation-polish "helper failed"
+    return
+  fi
+
+  if grep -Fqx 'mac_polish.helper=present' <<<"$out"; then
+    info "ok: Mac polish helper signal"
+    record_result ok mac-polish-helper "present"
+  else
+    warn "Mac polish helper signal missing"
+    record_result warn mac-polish-helper "missing"
+  fi
+
+  if grep -Fqx 'keyboard_policy.helper=present' <<<"$out"; then
+    info "ok: keyboard policy helper signal"
+    record_result ok keyboard-policy-helper "present"
+  else
+    warn "keyboard policy helper signal missing"
+    record_result warn keyboard-policy-helper "missing"
+  fi
+
+  policy_ok="$(awk -F= '$1=="keyboard_policy.policy_ok" {print $2}' <<<"$out" | tail -n1)"
+  if [[ "$policy_ok" == "yes" ]]; then
+    info "ok: keyboard policy valid"
+    record_result ok keyboard-policy "valid"
+  else
+    warn "keyboard policy is not valid"
+    record_result warn keyboard-policy "invalid"
+  fi
+}
+
 check_gsettings_equals(){
   local schema=$1
   local key=$2
@@ -398,6 +440,7 @@ main(){
   check rsync
   check_lampstand_lane
   check_lampstand_unit
+  check_workstation_polish
 
   if gnome_detect; then
     record_result info gnome "detected"

@@ -12,7 +12,7 @@ Canonical contract layer:
 - compatibility rules
 - ADRs
 
-### `SociOS-Linux/asahi-installer`
+### `SourceOS-Linux/asahi-installer`
 Apple Silicon bootstrap lane:
 - macOS-side machine checks
 - APFS / partition orchestration
@@ -20,10 +20,10 @@ Apple Silicon bootstrap lane:
 - IPSW and firmware preparation
 - installer packaging
 
-### `SociOS-Linux/asahi-u-boot`
+### `SourceOS-Linux/asahi-u-boot`
 Apple Silicon boot-chain lane.
 
-### Proposed `SociOS-Linux/asahi-installer-data`
+### Proposed `SourceOS-Linux/asahi-installer-data`
 Apple Silicon installer metadata and payload catalog.
 
 ### Proposed `SociOS-Linux/workstation-contracts`

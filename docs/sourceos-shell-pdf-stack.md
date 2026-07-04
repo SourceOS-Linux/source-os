@@ -11,6 +11,12 @@ The Linux realization currently carries service scaffolds for:
 
 These are represented both as systemd unit files under `linux/systemd/` and as service declarations in `modules/nixos/sourceos-shell/default.nix`.
 
+The Linux realization now also carries a machine-facing config surface at:
+
+- `/etc/sourceos-shell/pdf-stack.json`
+
+This config captures the relationship between the derive lane and the secure/sign-validate lane while the runtime repo is still absent.
+
 ## Intent
 
 This is the Linux realization slice of the broader PDF lane tracked in `#93`.
@@ -19,8 +25,9 @@ The future `SourceOS-Linux/sourceos-shell` runtime repo should own the actual PD
 
 ## Validation scaffold
 
-The current Linux realization adds a dedicated contract-style check at:
+The current Linux realization adds dedicated contract-style checks at:
 
 - `tests/sourceos-shell-pdf-stack-contract.nix`
+- `tests/sourceos-shell-pdf-config-contract.nix`
 
-This check verifies that the PDF-related runtime scaffolds and module hooks remain present and aligned.
+These checks verify that the PDF-related runtime scaffolds, module hooks, and realized config surface remain present and aligned.

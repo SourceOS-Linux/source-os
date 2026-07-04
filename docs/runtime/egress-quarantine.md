@@ -40,4 +40,4 @@ Each quarantine action should emit or reference:
 
 ## Temporary status
 
-This runbook documents the runtime bootstrap state in `SociOS-Linux/source-os` until a dedicated runtime repository exists.
+This runbook documents the runtime bootstrap state in `SourceOS-Linux/source-os` until a dedicated runtime repository exists.

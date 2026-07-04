@@ -1,94 +1,54 @@
-# workstation-v0 macOS shortcut map
+# Workstation v0 Shortcut Map Contract
 
-This document is the **bounded shortcut contract** for the workstation-v0 Mac-on-Linux lane.
-It distinguishes bindings that are **currently active** (enforced by existing helpers) from
-bindings that are **proposed / future work** (not yet applied to any configuration).
+This contract records the current workstation-v0 Mac-on-Linux shortcut surface and separates active bindings from proposed future bindings.
 
----
+It is documentation and validation guidance only. It does not change active keybindings.
 
 ## Active bindings
 
-The bindings below are applied by `profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh`
-and `profiles/linux-dev/workstation-v0/gnome/palette-hotkey.sh`.
-They can be verified at any time with
-`profiles/linux-dev/workstation-v0/doctor.sh`.
+| Action | Binding | Enforced by | Status |
+|---|---|---|---|
+| SourceOS palette | `Super+Space` | `profiles/linux-dev/workstation-v0/gnome/palette-hotkey.sh` | active |
+| Files / Nautilus | `Super+E` | `profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh` | active |
+| Terminal | `Super+Return` | `profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh` | active |
+| Full-screen screenshot | `Super+Shift+3` | `profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh`; `profiles/linux-dev/workstation-v0/bin/mac-screenshot.sh` | active |
+| Area screenshot | `Super+Shift+4` | `profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh`; `profiles/linux-dev/workstation-v0/bin/mac-screenshot.sh` | active |
+| Interactive screenshot UI | `Super+Shift+5` | `profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh`; `profiles/linux-dev/workstation-v0/bin/mac-screenshot.sh` | active |
+| Screenshots folder | `Super+Shift+6` | `profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh`; `profiles/linux-dev/workstation-v0/bin/mac-screenshot.sh` | active |
 
-| Shortcut         | Action                          | GNOME slot  | Enforced by              |
-|------------------|---------------------------------|-------------|--------------------------|
-| `Super+Space`    | Open SourceOS palette           | custom0     | `palette-hotkey.sh`      |
-| `Super+E`        | Open Files (Nautilus)           | custom1     | `mac-defaults.sh`        |
-| `Super+Return`   | Open Terminal (gnome-terminal)  | custom2     | `mac-defaults.sh`        |
-| `Super+Shift+3`  | Full-screen screenshot          | custom3     | `mac-defaults.sh`        |
-| `Super+Shift+4`  | Area screenshot                 | custom4     | `mac-defaults.sh`        |
-| `Super+Shift+5`  | Interactive screenshot UI       | custom5     | `mac-defaults.sh`        |
-| `Super+Shift+6`  | Open Screenshots folder         | custom6     | `mac-defaults.sh`        |
+## Active compatibility policy
 
-Screenshot commands are delegated to `mac-screenshot.sh`; output lands in
-`~/Pictures/Screenshots`.
+| Lane | Status | Enforced by | Notes |
+|---|---|---|---|
+| `input-remapper` primary backend | active policy | `profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh`; `profiles/linux-dev/workstation-v0/gnome/input-install.sh` | Default Fedora/GNOME path. |
+| `xremap` compatibility backend | active compatibility lane | `profiles/linux-dev/workstation-v0/gnome/input-install.sh` | Writes `$XDG_CONFIG_HOME/sourceos/input/xremap-macos-compat.yml` when explicitly selected. |
+| Kinto compatibility | documented compatibility lane | `profiles/linux-dev/workstation-v0/manifest.yaml`; `profiles/linux-dev/workstation-v0/gnome/README.md` | X11/xkeysnail-style compatibility. Not auto-installed in the Wayland-first profile. |
 
-Input-source switching is moved out of `Super+Space` to avoid collision:
-- `Alt+Shift_L` → switch input source forward
-- `Alt+Shift_R` → switch input source backward
+## Proposed future bindings, not active
 
----
+These are backlog candidates and must not be treated as implemented until a GitHub PR, branch, commit, or merge proves delivery with validation evidence.
 
-## Proposed / future bindings (non-active)
+| Proposed action | Candidate binding | Status | Notes |
+|---|---|---|---|
+| Spotlight-like global search refinement | `Super+Space` with richer provider routing | planned | Current palette exists; provider richness remains future work. |
+| Mission-control style overview tuning | TBD | planned | Must remain GNOME/Wayland-safe. |
+| App switching parity refinements | TBD | planned | Requires explicit remap policy and validation. |
+| Text-editing macOS modifier parity | TBD | planned | Must be validated per backend; not safe to assume globally. |
+| Full macOS shortcut parity | none | non-goal for v0 | v0 targets bounded GNOME polish, not a clone. |
 
-> **These bindings are NOT currently enforced.**
-> They are recorded here as planned macOS-parity work for a future lane.
-> No keybinding files, remap daemons, or GSettings entries reference them yet.
-
-| Shortcut              | macOS equivalent         | Proposed action                         | Status        |
-|-----------------------|--------------------------|-----------------------------------------|---------------|
-| `Super+C`             | `Cmd+C`                  | Copy (system clipboard)                 | future        |
-| `Super+V`             | `Cmd+V`                  | Paste (system clipboard)                | future        |
-| `Super+X`             | `Cmd+X`                  | Cut                                     | future        |
-| `Super+Z`             | `Cmd+Z`                  | Undo                                    | future        |
-| `Super+Shift+Z`       | `Cmd+Shift+Z`            | Redo                                    | future        |
-| `Super+A`             | `Cmd+A`                  | Select all                              | future        |
-| `Super+W`             | `Cmd+W`                  | Close window/tab                        | future        |
-| `Super+Q`             | `Cmd+Q`                  | Quit application                        | future        |
-| `Super+Tab`           | `Cmd+Tab`                | Switch application (app switcher)       | future        |
-| ``Super+` ``          | `` Cmd+` ``               | Switch window within application        | future        |
-| `Super+Shift+3`       | `Cmd+Shift+3`            | Full-screen screenshot (already active) | **active**    |
-| `Super+Shift+4`       | `Cmd+Shift+4`            | Area screenshot (already active)        | **active**    |
-| `Super+Shift+Control+3` | `Cmd+Ctrl+Shift+3`     | Screenshot to clipboard                 | future        |
-| `Super+Shift+Control+4` | `Cmd+Ctrl+Shift+4`     | Area screenshot to clipboard            | future        |
-
-Proposed bindings that overlap active bindings are listed for completeness only.
-
----
-
-## Helpers that enforce active bindings
-
-| Helper                                           | Responsibility                                                           |
-|--------------------------------------------------|--------------------------------------------------------------------------|
-| `gnome/palette-hotkey.sh`                        | Sets `Super+Space` → `sourceos palette`; moves input-source switch       |
-| `gnome/mac-defaults.sh`                          | Sets Files, Terminal, and all screenshot shortcuts (custom1–custom6)     |
-| `doctor.sh` (`check_mac_defaults`)               | Smoke-checks that custom-keybinding slots are populated                  |
-
----
-
-## Validation
+## Validation commands
 
 ```bash
-# Document exists and is non-empty
 test -s docs/workstation/shortcut-map.md
-
-# Key shortcuts are present in the document
-grep -R "Super+Shift+3" docs/workstation profiles/linux-dev/workstation-v0/gnome
-
-# Active bindings are enforced by helper scripts
-grep -q '<Super><Shift>3' profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh
-grep -q '<Super>space'    profiles/linux-dev/workstation-v0/gnome/palette-hotkey.sh
+grep -F "Super+Shift+3" docs/workstation/shortcut-map.md
+grep -F "active" docs/workstation/shortcut-map.md
+grep -F "planned" docs/workstation/shortcut-map.md
+grep -F "non-goal" docs/workstation/shortcut-map.md
 ```
 
----
+## Boundaries
 
-## Non-goals (v0)
-
-- Do not change keybindings in this document.
-- Do not modify remap daemon behavior.
-- Do not modify package manifests.
-- Do not claim parity with macOS beyond the active bindings listed above.
-- Proposed bindings require a separate remap-lane validation pass before activation.
+- This document does not modify keybindings.
+- Active binding changes belong in `profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh` or `palette-hotkey.sh`.
+- Backend remap changes belong in `profiles/linux-dev/workstation-v0/gnome/input-install.sh` and must be validated by `check-keyboard-policy.sh`.
+- Future parity claims must remain planned until backed by GitHub-visible implementation and validation evidence.

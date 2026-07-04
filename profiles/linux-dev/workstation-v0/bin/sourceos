@@ -328,6 +328,27 @@ status_check_lampstand_unit(){
   [[ "$active" == "yes" || "$active" == "unknown" ]] || WARNINGS+=("lampstand user unit not active")
 }
 
+status_check_workstation_polish(){
+  local helper="$PROFILE_DIR/bin/check-workstation-polish.sh"
+  local out policy_ok
+
+  if [[ ! -f "$helper" ]]; then
+    WARNINGS+=("missing workstation polish helper: $helper")
+    return
+  fi
+
+  if ! out="$(bash "$helper" 2>/dev/null)"; then
+    WARNINGS+=("workstation polish helper failed")
+    return
+  fi
+
+  grep -Fqx 'mac_polish.helper=present' <<<"$out" || WARNINGS+=("mac polish helper missing")
+  grep -Fqx 'keyboard_policy.helper=present' <<<"$out" || WARNINGS+=("keyboard policy helper missing")
+
+  policy_ok="$(awk -F= '$1=="keyboard_policy.policy_ok" {print $2}' <<<"$out" | tail -n1)"
+  [[ "$policy_ok" == "yes" ]] || WARNINGS+=("keyboard policy is not valid")
+}
+
 status_collect(){
   REQUIRED_MISSING=()
   OPTIONAL_MISSING=()
@@ -355,6 +376,7 @@ status_collect(){
 
   status_check_lampstand
   status_check_lampstand_unit
+  status_check_workstation_polish
 
   if gnome_detect; then
     if ! check_bin gsettings; then
