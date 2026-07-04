@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "sourceos.workstation-action-boundary.v0.1",
+  "kind": "WorkstationActionBoundary",
+  "boundaryId": "workstation-action-boundary:doctor-report-001",
+  "artifactKind": "doctor_report",
+  "profile": "linux-dev/workstation-v0",
+  "requestedAction": "sourceos doctor --json",
+  "evidenceRefs": ["evidence://sourceos/workstation/doctor-report-001"],
+  "policyDecisionRefs": [],
+  "mutation": {
+    "planned": false,
+    "performed": false,
+    "performedBy": null,
+    "beforeRefs": [],
+    "afterRefs": [],
+    "reversible": false,
+    "rollbackRefs": [],
+    "summary": "Doctor report is evidence/read path only."
+  },
+  "downstreamConsumers": ["agentplane", "sociosphere", "prophet-cli"],
+  "redaction": {
+    "rawSensitiveDataIncluded": false,
+    "redactedOnly": true
+  },
+  "notes": "Valid doctor report boundary: no mutation is planned or performed."
+}

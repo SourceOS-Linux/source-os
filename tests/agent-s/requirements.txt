@@ -1,0 +1,6 @@
+# Agent-S GUI test harness deps.
+# gui-agents is the Agent-S SDK (SocioProphet/Agent-S fork of simular-ai/Agent-S).
+gui-agents @ git+https://github.com/SocioProphet/Agent-S.git
+pyautogui
+pillow
+python-dotenv

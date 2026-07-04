@@ -24,7 +24,7 @@ The control-plane lifecycle, placement, promotion, reversal, and evidence topolo
 
 - `SocioProphet/agentplane` defines the execution and promotion control-plane model.
 - `SocioProphet/socioprophet-agent-standards` defines shared schemas and vocabulary.
-- `SociOS-Linux/source-os` realizes the Linux build, image, and host surfaces.
+- `SourceOS-Linux/source-os` realizes the Linux build, image, and host surfaces.
 
 ## Immediate implication
 

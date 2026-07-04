@@ -1,0 +1,92 @@
+name: workstation-keyboard-policy
+
+on:
+  pull_request:
+    paths:
+      - 'profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/input-install.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/README.md'
+      - 'profiles/linux-dev/workstation-v0/manifest.yaml'
+      - '.github/workflows/workstation-keyboard-policy.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/input-install.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/README.md'
+      - 'profiles/linux-dev/workstation-v0/manifest.yaml'
+      - '.github/workflows/workstation-keyboard-policy.yml'
+
+jobs:
+  keyboard-policy-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check keyboard policy scripts
+        run: |
+          set -euo pipefail
+          bash -n profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh
+          bash -n profiles/linux-dev/workstation-v0/gnome/input-install.sh
+
+      - name: Smoke: keyboard policy helper default backend
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh'
+          tmp_home=$(mktemp -d)
+          out=$(HOME="$tmp_home" XDG_CONFIG_HOME="$tmp_home/.config" bash "$helper")
+          grep -F 'default_backend=input-remapper' <<<"$out" >/dev/null
+          grep -F 'primary_backend=input-remapper' <<<"$out" >/dev/null
+          grep -F 'compatibility_backends=xremap,kinto' <<<"$out" >/dev/null
+          grep -F 'wayland_first=yes' <<<"$out" >/dev/null
+          grep -F 'kinto_auto_install=no' <<<"$out" >/dev/null
+          grep -F 'selected_backend=input-remapper' <<<"$out" >/dev/null
+          grep -F 'backend_valid=yes' <<<"$out" >/dev/null
+          grep -F 'selected_backend_available=missing' <<<"$out" >/dev/null
+          grep -F 'input_installer=present' <<<"$out" >/dev/null
+          grep -F 'policy_ok=yes' <<<"$out" >/dev/null
+
+      - name: Smoke: keyboard policy helper detects selected backend availability
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh'
+          tmp_home=$(mktemp -d)
+          stub_bin=$(mktemp -d)
+          cat > "$stub_bin/input-remapper-control" <<'EOF'
+          #!/usr/bin/env bash
+          exit 0
+          EOF
+          chmod +x "$stub_bin/input-remapper-control"
+          out=$(HOME="$tmp_home" XDG_CONFIG_HOME="$tmp_home/.config" PATH="$stub_bin:$PATH" bash "$helper")
+          grep -F 'input_remapper=present' <<<"$out" >/dev/null
+          grep -F 'selected_backend_available=present' <<<"$out" >/dev/null
+          grep -F 'policy_ok=yes' <<<"$out" >/dev/null
+
+      - name: Smoke: keyboard policy helper rejects invalid backend
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh'
+          tmp_home=$(mktemp -d)
+          out=$(HOME="$tmp_home" XDG_CONFIG_HOME="$tmp_home/.config" SOURCEOS_REMAP_BACKEND=invalid bash "$helper")
+          grep -F 'selected_backend=invalid' <<<"$out" >/dev/null
+          grep -F 'backend_valid=no' <<<"$out" >/dev/null
+          grep -F 'selected_backend_available=invalid' <<<"$out" >/dev/null
+          grep -F 'policy_ok=no' <<<"$out" >/dev/null
+
+      - name: Smoke: input installer writes xremap template in compatibility mode
+        run: |
+          set -euo pipefail
+          installer='profiles/linux-dev/workstation-v0/gnome/input-install.sh'
+          tmp_home=$(mktemp -d)
+          HOME="$tmp_home" XDG_CONFIG_HOME="$tmp_home/.config" XDG_CURRENT_DESKTOP=GNOME SOURCEOS_REMAP_BACKEND=xremap bash "$installer"
+          tmpl="$tmp_home/.config/sourceos/input/xremap-macos-compat.yml"
+          test -s "$tmpl"
+          grep -F 'CapsLock: Esc' "$tmpl" >/dev/null
+          grep -F 'Control_L: Super_L' "$tmpl" >/dev/null
+          grep -F 'Super_L: Alt_L' "$tmpl" >/dev/null
+          grep -F 'Alt_L: Control_L' "$tmpl" >/dev/null
+          grep -F 'Control_R: Super_R' "$tmpl" >/dev/null
+          grep -F 'Super_R: Alt_R' "$tmpl" >/dev/null
+          grep -F 'Alt_R: Control_R' "$tmpl" >/dev/null

@@ -1,0 +1,169 @@
+name: workstation-lampstand
+
+on:
+  pull_request:
+    paths:
+      - 'profiles/linux-dev/workstation-v0/bin/check-lampstand-unit.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/install-lampstand.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/sourceos-search.sh'
+      - 'profiles/linux-dev/workstation-v0/manifest.yaml'
+      - '.github/workflows/workstation-lampstand.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'profiles/linux-dev/workstation-v0/bin/check-lampstand-unit.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/install-lampstand.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/sourceos-search.sh'
+      - 'profiles/linux-dev/workstation-v0/manifest.yaml'
+      - '.github/workflows/workstation-lampstand.yml'
+
+jobs:
+  lampstand-installer-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check installer and helper
+        run: |
+          set -euo pipefail
+          bash -n profiles/linux-dev/workstation-v0/bin/check-lampstand-unit.sh
+          bash -n profiles/linux-dev/workstation-v0/bin/install-lampstand.sh
+          bash -n profiles/linux-dev/workstation-v0/bin/sourceos-search.sh
+
+      - name: Smoke: installer writes user service with stub pipx
+        run: |
+          set -euo pipefail
+          tmp_home=$(mktemp -d)
+          tmp_bin=$(mktemp -d)
+          tmp_src=$(mktemp -d)
+          printf '[project]\nname = "lampstand"\n' > "$tmp_src/pyproject.toml"
+
+          cat > "$tmp_bin/pipx" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          test "${1:-}" = install
+          mkdir -p "$HOME/.local/bin"
+          cat > "$HOME/.local/bin/lampstandd" <<'EOS'
+          #!/usr/bin/env bash
+          exit 0
+          EOS
+          chmod +x "$HOME/.local/bin/lampstandd"
+          EOF
+          chmod +x "$tmp_bin/pipx"
+
+          HOME="$tmp_home" \
+          XDG_CONFIG_HOME="$tmp_home/.config" \
+          SOURCEOS_LAMPSTAND_SRC="$tmp_src" \
+          PATH="$tmp_bin:$PATH" \
+            bash profiles/linux-dev/workstation-v0/bin/install-lampstand.sh
+
+          svc="$tmp_home/.config/systemd/user/sourceos-lampstand.service"
+          test -f "$svc"
+          grep -F 'lampstandd --root %h --rpc unixjson' "$svc" >/dev/null
+
+      - name: Smoke: Lampstand unit check helper
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/check-lampstand-unit.sh'
+          stub_bin=$(mktemp -d)
+          tmp_home=$(mktemp -d)
+          mkdir -p "$tmp_home/.config/systemd/user"
+          touch "$tmp_home/.config/systemd/user/sourceos-lampstand.service"
+          cat > "$stub_bin/systemctl" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          test "${1:-}" = --user
+          test "${2:-}" = is-enabled || test "${2:-}" = is-active
+          exit 0
+          EOF
+          chmod +x "$stub_bin/systemctl"
+          out=$(HOME="$tmp_home" PATH="$stub_bin:$PATH" bash "$helper")
+          grep -F 'unit_file=present' <<<"$out" >/dev/null
+          grep -F 'enabled=yes' <<<"$out" >/dev/null
+          grep -F 'active=yes' <<<"$out" >/dev/null
+
+      - name: Smoke: sourceos-search runtime commands with stub lampstand
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/sourceos-search.sh'
+          stub_bin=$(mktemp -d)
+          cat > "$stub_bin/lampstand" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          case "${1:-}" in
+            query)
+              printf '/tmp/example.txt\t(score=1.000)\n'
+              printf '  snippet for %s\n' "$*"
+              ;;
+            health)
+              printf '{"ok": true, "service": "lampstand"}\n'
+              ;;
+            stats)
+              printf '{"documents": 1, "terms": 3}\n'
+              ;;
+            index)
+              printf '{"indexed": 1}\n'
+              ;;
+            *)
+              printf 'unexpected command: %s\n' "$*" >&2
+              exit 2
+              ;;
+          esac
+          EOF
+          chmod +x "$stub_bin/lampstand"
+
+          tmp_dir=$(mktemp -d)
+          query_out="$tmp_dir/query.txt"
+          health_out="$tmp_dir/health.json"
+          stats_out="$tmp_dir/stats.json"
+
+          PATH="$stub_bin:$PATH" bash "$helper" --snippet --write "$query_out" report
+          grep -F '/tmp/example.txt' "$query_out" >/dev/null
+
+          PATH="$stub_bin:$PATH" bash "$helper" health --write "$health_out"
+          grep -F '"ok": true' "$health_out" >/dev/null
+
+          PATH="$stub_bin:$PATH" bash "$helper" stats --write "$stats_out"
+          grep -F '"documents": 1' "$stats_out" >/dev/null
+
+          PATH="$stub_bin:$PATH" bash "$helper" index --root "$tmp_dir" >/dev/null
+
+      - name: Smoke: sourceos-search user service commands with stub systemctl
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/sourceos-search.sh'
+          stub_bin=$(mktemp -d)
+          cat > "$stub_bin/systemctl" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          test "${1:-}" = --user
+          shift
+          case "${1:-}" in
+            status)
+              printf 'sourceos-lampstand.service active\n'
+              ;;
+            start|stop|restart|enable)
+              printf 'systemctl --user %s %s\n' "$1" "${2:-}"
+              ;;
+            *)
+              printf 'unexpected systemctl args: %s\n' "$*" >&2
+              exit 2
+              ;;
+          esac
+          EOF
+          cat > "$stub_bin/journalctl" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf 'lampstand log line\n'
+          EOF
+          chmod +x "$stub_bin/systemctl" "$stub_bin/journalctl"
+
+          tmp_dir=$(mktemp -d)
+          PATH="$stub_bin:$PATH" bash "$helper" service status --write "$tmp_dir/status.txt"
+          grep -F 'sourceos-lampstand.service active' "$tmp_dir/status.txt" >/dev/null
+          PATH="$stub_bin:$PATH" bash "$helper" service restart >/dev/null
+          PATH="$stub_bin:$PATH" bash "$helper" service enable >/dev/null
+          PATH="$stub_bin:$PATH" bash "$helper" service logs --write "$tmp_dir/logs.txt"
+          grep -F 'lampstand log line' "$tmp_dir/logs.txt" >/dev/null

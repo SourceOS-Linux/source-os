@@ -31,7 +31,7 @@ writeShellApplication {
 
     case "$LISTEN" in
       unix:*)
-        SOCKET_PATH="${LISTEN#unix:}"
+        SOCKET_PATH="''${LISTEN#unix:}"
         ;;
       *)
         echo "meshd: only unix: listeners are supported by this bootstrap package" >&2
