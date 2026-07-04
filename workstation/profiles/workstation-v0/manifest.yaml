@@ -26,6 +26,7 @@ spec:
           - toolbox
           - wl-clipboard
           - jq
+          - xclip
         dnf:
           - git
           - openssh-clients
@@ -33,6 +34,7 @@ spec:
           - toolbox
           - wl-clipboard
           - jq
+          - xclip
 
     user:
       description: >-
@@ -52,6 +54,9 @@ spec:
           - fd
           - ripgrep
 
+          # Find/replace
+          - sd
+
           # Git
           - lazygit
           - gh
@@ -61,7 +66,9 @@ spec:
 
           # Process / ops
           - tmux
+          - sesh
           - mprocs
+          - procs
           - lazydocker
           - k9s
           - btop
@@ -89,6 +96,12 @@ spec:
           - minio-mc
           - rsync
 
+          # Watch / change-trigger
+          - entr
+
+          # Curl UX
+          - curlie
+
         # Optional / platform-specific tooling can be resolved by installer
         # and may not exist on every package backend.
 
@@ -108,7 +121,7 @@ spec:
       inputs:
         kinto:
           enabled: true
-          note: "Kinto is X11-centric; Wayland support requires validation." 
+          note: "Kinto is X11-centric; Wayland support requires validation. Consider keyd/xremap for Wayland." 
         fusuma:
           enabled: true
           note: "Gestures via libinput; validate hardware compatibility." 
@@ -120,4 +133,3 @@ spec:
       plugin:
         id: sourceos
         trigger: "sourceos "
-
