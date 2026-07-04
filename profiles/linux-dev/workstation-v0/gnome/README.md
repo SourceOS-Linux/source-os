@@ -42,6 +42,18 @@ Principles:
 - `Super+Shift+5` interactive screenshot UI
 - `Super+Shift+6` open screenshot directory
 
+## Mac defaults validation
+
+The mac-like GNOME defaults script can be inspected without running GNOME:
+
+```bash
+./profiles/linux-dev/workstation-v0/bin/check-mac-defaults.sh
+```
+
+The helper emits key=value output for the expected behavior slice, including hot corners, 12h clock, locate pointer, Nautilus click policy, dock favorites, Files/Terminal bindings, screenshot bindings, and screenshot directory setup.
+
+It is read-only and does not change active keybindings or GNOME settings.
+
 ## Appearance/sidebar polish v1
 
 This lane adds bounded visual/workflow polish without replacing GNOME Shell or libadwaita:
@@ -49,6 +61,31 @@ This lane adds bounded visual/workflow polish without replacing GNOME Shell or l
 - `appearance-apply.sh` applies stable GNOME interface settings such as color-scheme preference, cursor size, font antialiasing, overlay scrolling, and primary-selection paste behavior.
 - `files-sidebar.sh` seeds GTK/Nautilus bookmarks for Desktop, Documents, Downloads, Pictures, Screenshots, Music, Videos, and Public.
 - The workstation installer runs both helpers best-effort after the extension pinset and before input/gesture setup.
+
+## Extension/dock validation helper
+
+`check-gnome-extensions.sh` emits `key=value` status for the GNOME extension and dock lane so that `doctor`, `status`, and CI can reason about it without a live GNOME session.
+
+Keys emitted:
+
+| Key | Values |
+|-----|--------|
+| `gnome_detected` | `yes` / `no` |
+| `gnome_extensions_cli` | `present` / `missing` |
+| `gsettings` | `present` / `missing` |
+| `dash_to_dock` | `enabled` / `present` / `missing` / `unknown` |
+| `appindicator` | `enabled` / `present` / `missing` / `unknown` |
+| `favorite_apps` | gsettings value or `unknown` |
+| `dock_position` | gsettings value or `unknown` |
+| `dock_autohide` | gsettings value or `unknown` |
+| `dock_intellihide` | gsettings value or `unknown` |
+
+**Known gaps:** extension status is `unknown` when `gnome-extensions` CLI is absent (e.g. on a CI runner or server).  Dock gsettings keys are `unknown` when the Dash-to-Dock schema is not installed.
+
+```bash
+bash -n gnome/check-gnome-extensions.sh   # syntax check
+bash    gnome/check-gnome-extensions.sh   # emit status
+```
 
 ## Keyboard/remap policy v1
 

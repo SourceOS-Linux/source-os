@@ -15,6 +15,8 @@ The Linux and desktop layer should own:
 - local office smoke tests and round-trip verification
 - local semantic extraction hooks for documents
 - desktop shell behavior for opening office files and handing off cloud edit sessions when required
+- Lampstand-backed local indexing and search handoff for office files
+- local memory hooks where policy allows recall and writeback around desktop office actions
 
 ## Boundary rule
 
@@ -39,8 +41,22 @@ Shared schemas and canonical runtime vocabulary should stay in upstream product/
 
 ### With `prophet-workspace`
 
-Product/domain semantics for docs, sheets, slides, files, collaboration, AI assistance, and workflow agents belong there.
+Product/domain semantics for docs, sheets, slides, files, collaboration, AI assistance, workflow agents, memory-aware recall, and search parity belong there.
 
 ### With `prophet-platform`
 
-Cloud document control, WOPI host behavior, office runtime schemas, AI actions, and workflow runtime belong there.
+Cloud document control, WOPI host behavior, office runtime schemas, AI actions, memory-backed orchestration, and workflow runtime belong there.
+
+### With `memory-mesh`
+
+`SocioProphet/memory-mesh` should provide:
+- user and project recall for office workflows
+- writeback-after-action for office assistants and workflow agents
+- configurable retention and recall policy for desktop and cloud office surfaces
+
+### With `lampstand`
+
+`SocioProphet/lampstand` should provide:
+- local office file discovery and search handoff
+- inspectable local indexing state for office documents
+- desktop search surfaces that can launch SourceOS office workflows and cloud handoff flows

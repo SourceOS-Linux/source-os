@@ -24,6 +24,8 @@ require_file "build/office-suite/scripts/office_open.sh"
 require_file "build/office-suite/scripts/office_open_smoke.sh"
 require_file "build/office-suite/scripts/office_extract_smoke.sh"
 require_file "build/office-suite/scripts/office_search_handoff.sh"
+require_file "build/office-suite/scripts/office_search_open.sh"
+require_file "build/office-suite/scripts/office_search_open_smoke.sh"
 
 if [[ $FAIL -ne 0 ]]; then
   echo "office suite profile verification failed" >&2

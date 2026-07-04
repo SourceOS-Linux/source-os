@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# SourceOS Toolbox/AUR bridge (v0)
+# Purpose: provide a deterministic place to build/install AUR packages without contaminating the host.
+# Model: create an Arch-based toolbox container and use yay inside it.
+
+PROFILE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+err(){ printf "ERROR: %s\n" "$*" >&2; }
+info(){ printf "INFO: %s\n" "$*" >&2; }
+
+have(){ command -v "$1" >/dev/null 2>&1; }
+
+require(){
+  local bin=$1
+  have "$bin" || { err "missing required command: $bin"; exit 2; }
+}
+
+container_name(){
+  # stable name (profile scoped)
+  echo "sourceos-arch"
+}
+
+ensure_toolbox(){
+  require toolbox
+  require podman
+}
+
+ensure_arch_toolbox(){
+  ensure_toolbox
+
+  local name
+  name="$(container_name)"
+
+  # idempotent: if container exists, do nothing.
+  if toolbox list 2>/dev/null | awk '{print $1}' | grep -qx "$name"; then
+    info "toolbox exists: $name"
+    return
+  fi
+
+  info "creating toolbox container: $name"
+  # toolbox supports non-fedora images via --image
+  toolbox create --container "$name" --image archlinux:latest
+}
+
+arch_bootstrap(){
+  local name
+  name="$(container_name)"
+
+  info "bootstrapping AUR toolchain inside: $name"
+
+  toolbox run --container "$name" -- bash -lc '
+    set -euo pipefail
+    pacman -Sy --noconfirm
+    pacman -S --noconfirm --needed base-devel git sudo
+
+    # create a non-root build user
+    if ! id -u builder >/dev/null 2>&1; then
+      useradd -m -s /bin/bash builder
+      echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
+      chmod 0440 /etc/sudoers.d/builder
+    fi
+
+    # install yay if missing
+    if ! command -v yay >/dev/null 2>&1; then
+      su - builder -c "cd ~ && git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si --noconfirm"
+    fi
+  '
+}
+
+aur_install(){
+  local pkg=${1:-}
+  [[ -n "$pkg" ]] || { err "package name required"; exit 2; }
+
+  local name
+  name="$(container_name)"
+
+  ensure_arch_toolbox
+  arch_bootstrap
+
+  info "installing AUR package in toolbox ($name): $pkg"
+  toolbox run --container "$name" -- bash -lc "su - builder -c 'yay -S --noconfirm --needed $pkg'"
+
+  info "done: $pkg (installed inside toolbox container only)"
+}
+
+usage(){
+  cat <<'EOF'
+sourceos-aur - SourceOS toolbox/AUR bridge
+
+Usage:
+  sourceos-aur init
+  sourceos-aur install <aur-package>
+
+Notes:
+  - This keeps AUR builds out of the host trust boundary.
+  - Installed binaries live inside the toolbox container.
+  - For host integration, wrap calls via `toolbox run --container sourceos-arch -- <cmd>`.
+EOF
+}
+
+main(){
+  local cmd=${1:-}
+  case "$cmd" in
+    init)
+      ensure_arch_toolbox
+      arch_bootstrap
+      ;;
+    install)
+      shift
+      aur_install "${1:-}"
+      ;;
+    -h|--help|help|"")
+      usage
+      ;;
+    *)
+      err "unknown command: $cmd"
+      usage
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

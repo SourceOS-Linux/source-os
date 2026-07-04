@@ -1,0 +1,49 @@
+name: workstation-mac-defaults
+
+on:
+  pull_request:
+    paths:
+      - 'profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/check-mac-defaults.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/README.md'
+      - '.github/workflows/workstation-mac-defaults.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/check-mac-defaults.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/README.md'
+      - '.github/workflows/workstation-mac-defaults.yml'
+
+jobs:
+  mac-defaults-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check mac defaults scripts
+        run: |
+          set -euo pipefail
+          bash -n profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh
+          bash -n profiles/linux-dev/workstation-v0/bin/check-mac-defaults.sh
+
+      - name: Smoke: mac defaults helper reports expected behavior slice
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/check-mac-defaults.sh'
+          out=$(bash "$helper")
+          grep -F 'mac_defaults_script=present' <<<"$out" >/dev/null
+          grep -F 'hot_corners_disabled=present' <<<"$out" >/dev/null
+          grep -F 'clock_12h=present' <<<"$out" >/dev/null
+          grep -F 'locate_pointer=present' <<<"$out" >/dev/null
+          grep -F 'nautilus_double_click=present' <<<"$out" >/dev/null
+          grep -F 'dock_favorites_seed=present' <<<"$out" >/dev/null
+          grep -F 'files_binding=present' <<<"$out" >/dev/null
+          grep -F 'terminal_binding=present' <<<"$out" >/dev/null
+          grep -F 'screenshot_screen_binding=present' <<<"$out" >/dev/null
+          grep -F 'screenshot_area_binding=present' <<<"$out" >/dev/null
+          grep -F 'screenshot_ui_binding=present' <<<"$out" >/dev/null
+          grep -F 'screenshot_folder_binding=present' <<<"$out" >/dev/null
+          grep -F 'screenshot_directory=present' <<<"$out" >/dev/null

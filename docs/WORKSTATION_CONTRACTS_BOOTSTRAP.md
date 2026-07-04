@@ -17,8 +17,8 @@ The goal is to keep generic runner / adapter / workspace / CI / package-catalog 
 
 It should **consume**:
 - `SourceOS-Linux/sourceos-spec` for normative schemas/contracts
-- `SociOS-Linux/asahi-installer` for Apple Silicon bootstrap flow
-- future `SociOS-Linux/asahi-installer-data` for Apple Silicon install metadata
+- `SourceOS-Linux/asahi-installer` for Apple Silicon bootstrap flow
+- future `SourceOS-Linux/asahi-installer-data` for Apple Silicon install metadata
 
 ## Initial repository shape
 

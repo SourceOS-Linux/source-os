@@ -66,7 +66,7 @@ For high-risk work, prefer this progression:
 
 Repository-specific notes:
 
-- `SociOS-Linux/source-os` is a Linux realization repository for SourceOS/SociOS work.
+- `SourceOS-Linux/source-os` is a Linux realization repository for SourceOS/SociOS work.
 - Workstation changes should preserve bounded GNOME defaults and avoid fragile shell replacement.
 - Mac-on-Linux work must distinguish implemented behavior from proposed/future parity.
 - Validation helpers should emit simple, parseable output where possible.

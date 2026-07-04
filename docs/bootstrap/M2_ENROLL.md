@@ -1,0 +1,352 @@
+# SourceOS M2 Enrollment Runbook
+
+Canonical procedure for enrolling any Apple Silicon M2 as a SourceOS builder node.
+
+After completion the device runs:
+- NixOS on Asahi Linux (bare-metal aarch64)
+- Foreman+Katello content lifecycle stack (Docker, linux/amd64 via qemu-user-static)
+- `harmonia` Nix binary cache at `http://127.0.0.1:8101` (nginx proxy + minisig endpoint)
+- `sourceos-syncd` polling Katello `stable` every 5 min, applying NixOS updates, emitting `SyncCycleReceipt`
+- `sourceos-boot` health-check timer auto-rolling back failed updates
+
+---
+
+## Prerequisites
+
+| Requirement | Notes |
+|-------------|-------|
+| M2 Mac (any model) | MacBook Pro/Air/Mini/Studio M2 |
+| 16 GB RAM | Foreman+Katello uses ~3 GB; 8 GB minimum, 16 GB recommended |
+| 100 GB free disk | NixOS partition + Docker volumes + Nix store |
+| Internet | Asahi installer + Nix binary cache |
+| macOS 13.0+ | Asahi installer requires Ventura or later |
+| SSH key with GitHub access | To clone `SocioProphet/prophet-platform` (private) |
+
+---
+
+## Phase A — Asahi Linux install (~20 min)
+
+```sh
+curl https://alx.sh | sh
+```
+
+Select **"Asahi Linux (minimal)"** when prompted. The installer:
+1. Resizes the macOS partition
+2. Reboots into an Apple recovery environment to finalize
+3. Boots into minimal Fedora Asahi Linux
+
+---
+
+## Phase A-alt — If you already ran Asahi step 1 but NOT step 2
+
+**Symptoms:** Device boots m1n1 but stalls at USB proxy mode (black screen with m1n1 USB gadget exposed). This means the Asahi installer step 2 (1TR) was never run, so `kmutil configure-boot` never registered the m1n1+U-Boot combined binary.
+
+**State check:** From macOS, `diskutil list` shows a 2.5 GB SourceOS APFS stub at disk0s3. The `Finish Installation.app` is present inside the SourceOS system volume. The EFI partition (disk0s4) may be unformatted (Volume Total Space = 0 B).
+
+**Fix:**
+
+```sh
+# From macOS:
+sudo bash scripts/finish-step2.sh
+```
+
+This script:
+1. Verifies `boot.bin` (m1n1+U-Boot ~1.7 MB) is present in `Finish Installation.app/Contents/Resources/`
+2. Formats the EFI partition (disk0s4) as FAT32 if it has no filesystem
+3. Prints step-by-step instructions for running step 2 from 1TR
+
+After running the script, follow the 1TR instructions it prints:
+- Shut down → hold power → startup options → select **SourceOS** → Options
+- `Finish Installation.app` launches (or run `step2.sh` from Terminal)
+- Enter macOS credentials twice (bputil + kmutil prompts)
+- Device reboots with m1n1+U-Boot registered — **proxy stall is gone**
+
+Then continue with [Phase A-usb](#phase-a-usb--nixos-installer-usb) below instead of Phase B.
+
+---
+
+## Phase A-usb — NixOS installer (internal partition)
+
+If you went through Phase A-alt (custom Asahi step 1) rather than the standard Asahi+Fedora path, you arrive at U-Boot but have no Fedora to nixos-infect. The NixOS installer ISO is written to an internal NVMe partition (`disk0s9`); U-Boot finds it via `bootflow scan -b` without any USB drive.
+
+**Write the installer ISO to the internal partition (from macOS, ~3 min):**
+
+```sh
+# Download the NixOS aarch64 installer ISO (or use one already on disk):
+# https://nixos.org/download — pick the minimal aarch64 ISO
+
+# Write to the pre-existing installer partition (disk0s9, ~1.1 GB):
+# Must use osascript for admin elevation; whole-disk writes are blocked by
+# macOS disk arbitration while the APFS container is mounted.
+cat > /tmp/write_iso.sh <<'EOF'
+dd if=/path/to/nixos-minimal-*.aarch64-linux.iso of=/dev/rdisk0s9 bs=4096
+EOF
+osascript -e 'do shell script "bash /tmp/write_iso.sh" with administrator privileges'
+
+# Verify: CD001 magic at sector 16 (byte 32769)
+dd if=/dev/rdisk0s9 bs=4096 skip=8 count=1 2>/dev/null | xxd -s 1 -l 5
+# Expected: 00000001: 4344 3030 31               CD001
+```
+
+> **Pre-flight check:** Before doing 1TR, run `sudo bash scripts/preflight.sh` from macOS.
+> It verifies all 9 boot-chain conditions (boot.bin, GRUB, iso9660 label, CD001 magic, no AppleDouble files) and exits 1 on any failure.
+
+**Boot sequence:**
+1. Run preflight: `sudo bash scripts/preflight.sh`
+2. Shut down → hold power → "Loading startup options…" → select **SourceOS** → Options → complete 1TR (see Phase A-alt for step-by-step)
+3. Reboot → select **SourceOS** — U-Boot auto-boots from internal NVMe via `bootflow scan -b` → GRUB → NixOS installer (~1–2 min)
+4. Log in as root, then run:
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/SourceOS-Linux/source-os/main/scripts/install-on-device.sh | sudo bash
+   ```
+   `install-on-device.sh` auto-detects partitions via `lsblk`; no PARTUUIDs to supply.
+5. After reboot into SourceOS NixOS, run enroll (Phase D below)
+
+> **USB alternative:** A USB drive also works — U-Boot scans all block devices. Format as FAT32, copy GRUB (`EFI/BOOT/BOOTAA64.EFI`) to the USB, and write the ISO to the USB instead of disk0s9. The internal partition approach is preferred as it requires no extra hardware.
+
+---
+
+## Phase B — Replace Fedora with NixOS (~15 min)
+
+> **Note:** Only needed if you ran the standard Asahi installer (Phase A) and landed in Fedora. Skip to Phase C if you used Phase A-usb.
+
+From the Fedora Asahi shell:
+
+```sh
+sudo -i
+
+# Install NixOS over Fedora using nixos-infect.
+# NO_REBOOT=1 keeps the session open so we can clone the repo first.
+curl -L https://raw.githubusercontent.com/elitak/nixos-infect/master/nixos-infect | \
+  NIX_CHANNEL=nixos-unstable NO_REBOOT=1 bash 2>&1 | tee /tmp/nixos-infect.log
+
+# Verify nixos-infect completed successfully before continuing
+grep -q 'configuration changed' /tmp/nixos-infect.log || \
+  { echo "nixos-infect may have failed — check /tmp/nixos-infect.log before rebooting"; exit 1; }
+
+# Clone source-os before rebooting into NixOS.
+# CRITICAL: do not reboot until this succeeds. If the clone fails, fix the
+# issue (SSH key, network) and retry. Rebooting without the repo leaves you
+# with a NixOS system you can't enroll without network recovery.
+mkdir -p /opt/source-os
+git clone git@github.com:SourceOS-Linux/source-os.git /opt/source-os || \
+  git clone https://github.com/SourceOS-Linux/source-os.git /opt/source-os || \
+  { echo "FATAL: git clone failed. Fix network/SSH access before rebooting."; exit 1; }
+
+echo "Clone successful — safe to reboot."
+reboot
+```
+
+---
+
+## Phase C — First NixOS boot
+
+Log in as root (no password on first boot). Verify:
+
+```sh
+nixos-version   # should show NixOS 25.05 or similar
+uname -r        # should include "asahi"
+```
+
+---
+
+## Phase D — Enrollment (~35–50 min)
+
+Run the enrollment script as root from the repo root. It is fully automated and idempotent.
+
+```sh
+cd /opt/source-os
+sudo SOURCEOS_REPO_ROOT=$PWD bash scripts/enroll.sh
+```
+
+### What it does
+
+| Step | Action | Notes |
+|------|--------|-------|
+| 0 | Preflight checks | root, NixOS, repo present |
+| 1 | `nixos-generate-config` | writes `hosts/builder-aarch64/hardware-configuration.nix` (gitignored) |
+| 2 | `nixos-rebuild switch --impure` pass 1 | installs Docker, age, sops, minisign; `--impure` required so gitignored files are visible |
+| 3 | Generate age key | `/etc/sourceos/age.key` — device-specific, never leaves the machine |
+| 4 | Clone + start Foreman+Katello | `docker compose up` from `prophet-platform`; waits up to 20 min for installer |
+| 5 | Katello content setup | org, product, repos, content view via `scripts/katello-sourceos-setup.sh` |
+| 6 | Encrypt secrets | Katello password → SOPS-encrypted at `/etc/sourceos/secrets.yaml` |
+| 7 | harmonia signing key | `nix-store --generate-binary-cache-key` → `/etc/sourceos/harmonia-signing.{key,pub}` |
+| 8 | minisign key + cache signature | key pair → `/etc/sourceos/nix-cache.{pub,sec}`; signs `nix-cache-info` for nginx endpoint |
+| 9 | Write `enroll.nix` | device-specific NixOS settings: `signingPublicKey`, `trusted-public-keys`; gitignored, no Nix file patching |
+| 10 | Build + push NixOS closure | `nix build` + `nix copy` to local harmonia cache |
+| 11 | `nixos-rebuild switch --impure` pass 2 | activates harmonia, nginx, sops-decrypted secrets, signing key |
+| 12 | Verify | all systemd services active; first `SyncCycleReceipt` emitted |
+
+### Watching the Foreman installer (step 4)
+
+In a second terminal:
+
+```sh
+docker compose -f /opt/prophet-platform/infra/local/docker-compose.foreman-katello.yml \
+  logs -f foreman-katello
+```
+
+Installation is complete when you see `Installation complete!`. The script waits automatically (up to 20 min).
+
+---
+
+## Phase E — Verify
+
+After the enrollment banner prints:
+
+```sh
+bash scripts/doctor.sh
+```
+
+Expected: 14 green checks. Key ones:
+
+```
+✓  NixOS version                    25.05 (builder-aarch64)
+✓  Asahi kernel                     6.x.x-asahi
+✓  Docker                           3 katello containers running
+✓  Foreman+Katello API              https://127.0.0.1:8443
+✓  harmonia (Nix cache)             active
+✓  nginx (cache proxy)              active
+✓  Nix cache :8101                  http://127.0.0.1:8101
+✓  nix-cache-info minisig           signature valid
+✓  sourceos-syncd daemon            active since ...
+✓  Last sync receipt                outcome=applied, 30s ago
+```
+
+---
+
+## Steady-state operation
+
+```
+Every 5 min     sourceos-syncd polls Katello stable
+                → new version: nix copy → nixos-rebuild → SyncCycleReceipt
+                → no change: SyncCycleReceipt (outcome: no_change)
+
+120s post-boot  sourceos-health-check.timer fires
+                → healthy: no action
+                → unhealthy: sourceos-boot rollback execute → nixos-rebuild --rollback
+```
+
+**Trigger a sync immediately:**
+
+```sh
+# 1. Promote a new content view version to stable
+bash scripts/promote.sh
+
+# 2. Force the daemon to poll now
+systemctl restart sourceos-syncd
+
+# 3. Watch it apply
+journalctl -u sourceos-syncd -f
+```
+
+---
+
+## Architecture notes
+
+### `--impure` requirement
+
+`nixos-rebuild switch` is called with `--impure` because two required files are gitignored:
+
+| File | Why gitignored |
+|------|----------------|
+| `hosts/builder-aarch64/hardware-configuration.nix` | Contains device-specific UUIDs/paths |
+| `hosts/builder-aarch64/enroll.nix` | Contains device-specific keys (signingPublicKey, harmonia trusted-public-key) |
+
+Without `--impure`, Nix copies the flake source to the store and strips gitignored files, making `builtins.pathExists ./enroll.nix` return `false` and the hardware config import fail.
+
+### Secrets model
+
+All secrets live at `/etc/sourceos/` — outside the repo. Nothing device-specific is ever committed.
+
+| File | Content | Protected by |
+|------|---------|--------------|
+| `/etc/sourceos/age.key` | Device age private key | chmod 600, root only |
+| `/etc/sourceos/secrets.yaml` | SOPS-encrypted Katello password | age key |
+| `/etc/sourceos/harmonia-signing.key` | Nix cache signing key | chmod 600 |
+| `/etc/sourceos/nix-cache.sec` | minisign private key | chmod 600 |
+| `/etc/sourceos/katello-admin-password` | Katello admin password (plaintext) | chmod 600, root only |
+
+### harmonia + nginx
+
+harmonia serves `/nix/store` as a Nix binary cache at `127.0.0.1:8099`. nginx wraps it at `:8101` and additionally serves `GET /nix-cache-info.minisig` as a static file. sourceos-syncd fetches both the cache info and the minisig before running `nix copy` to verify the cache identity.
+
+harmonia only starts after `/etc/sourceos/harmonia-signing.key` exists (enforced via `systemd.services.harmonia.unitConfig.ConditionPathExists`).
+
+---
+
+## Troubleshooting
+
+### `error: path 'hardware-configuration.nix' does not exist`
+Run step 1 manually: `nixos-generate-config --show-hardware-config > hosts/builder-aarch64/hardware-configuration.nix`, then retry enroll.sh.
+
+### `error: access to absolute path is forbidden in pure eval mode`
+You ran `nixos-rebuild` without `--impure`. Always use enroll.sh rather than calling nixos-rebuild directly. For manual rebuilds: `nixos-rebuild switch --flake .#builder-aarch64 --impure`.
+
+### Foreman installer never completes
+```sh
+docker exec katello-foreman tail -f /var/log/foreman-installer/foreman-installer.log
+# Hung on Puppet? Restart: docker compose restart foreman-katello
+```
+
+### harmonia not starting
+```sh
+systemctl status harmonia
+# "ConditionPathExists was not met" = key not yet generated
+# Run: nix-store --generate-binary-cache-key builder-aarch64-1 \
+#        /etc/sourceos/harmonia-signing.key /etc/sourceos/harmonia-signing.pub
+# Then: systemctl start harmonia
+```
+
+### `sourceos-syncd` fails authentication
+Katello password file: `cat /etc/sourceos/katello-admin-password`. Verify it matches Foreman UI at `https://127.0.0.1:8443`.
+
+### Rollback triggered unexpectedly
+```sh
+sourceos-syncd receipts list       # recent sync history
+journalctl -u sourceos-health-check -n 50
+sourceos-boot rollback plan        # dry-run the rollback
+```
+
+---
+
+## Re-enrollment
+
+The enrollment script is fully idempotent. If a step fails, fix the issue and re-run:
+
+```sh
+sudo bash scripts/enroll.sh
+```
+
+If the age key or signing keys need to be regenerated (e.g., disk wipe), delete `/etc/sourceos/` and re-run. The SOPS secrets will be re-encrypted with the new age key.
+
+### `secrets.yaml cannot be decrypted with current age key`
+
+The age key changed after secrets were encrypted (e.g., manual deletion + re-run). The old ciphertext is unrecoverable. Delete and re-enroll:
+
+```sh
+rm -f /etc/sourceos/secrets.yaml /etc/sourceos/age.key /etc/sourceos/age.pub
+sudo bash scripts/enroll.sh
+```
+
+### `Partial harmonia/minisign key state detected`
+
+One file of a key pair was deleted. The script refuses to regenerate silently to avoid orphaning cache signatures. Delete the entire pair and re-run:
+
+```sh
+rm -f /etc/sourceos/harmonia-signing.key /etc/sourceos/harmonia-signing.pub
+rm -f /etc/sourceos/nix-cache.pub /etc/sourceos/nix-cache.sec
+sudo bash scripts/enroll.sh
+```
+
+### Pass 1 or pass 2 rebuild failed
+
+If `nixos-rebuild switch` fails during enrollment, the previous generation remains bootable. Check the log printed by the script and inspect:
+
+```sh
+journalctl -xe | tail -80
+# or replay the log file path printed by the script
+cat /tmp/sourceos-enroll-pass1-*.log
+```
+
+The system can always boot into the previous generation via the systemd-boot menu.
