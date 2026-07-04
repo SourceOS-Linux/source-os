@@ -16,6 +16,8 @@ spec:
         - xclip
         - fuzzel
         - input-remapper
+        - sushi
+        - gnome-screenshot
       dnf:
         - git
         - openssh-clients
@@ -26,6 +28,8 @@ spec:
         - xclip
         - fuzzel
         - input-remapper
+        - sushi
+        - gnome-screenshot
     user:
       brew:
         - fzf
@@ -62,6 +66,7 @@ spec:
         - kondo
         - glow
         - hyperfine
+        - pipx
         - rclone
         - minio-mc
         - rsync
@@ -82,6 +87,10 @@ spec:
           name: fusuma
           enabled: true
           rationale: "MIT multitouch gesture recognizer using libinput"
+      mac_polish:
+        quicklook: sushi
+        screenshots: gnome-screenshot
+        screenshot_dir: "~/Pictures/Screenshots"
   launcher:
     palette:
       primary: fuzzel
@@ -90,3 +99,10 @@ spec:
         - rofi
       trigger: "<Super>space"
       command: "sourceos palette"
+    search:
+      file_backend: lampstand
+      invariant: no_redundant_file_search
+      authority: sourceos-search
+      notes:
+        - "Lampstand is the Linux-native file search backend."
+        - "The launcher remains an action bus and must not perform a second file-search pass."

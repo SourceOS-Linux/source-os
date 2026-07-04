@@ -1,0 +1,39 @@
+{
+  "$schema-note": "SourceOS OS-package manifest for the Asahi installer. The asahi-installer reads this (via INSTALLER_DATA) and offers the listed OSes. The `package` URLs and `sha256` are filled in by the release CI (release-images.yml) and point at the matching GitHub Release assets. Field names follow the asahi-installer os_list schema; pin them against the installer version at release time.",
+  "version": 6,
+  "os_list": [
+    {
+      "name": "SourceOS ${VERSION} (full)",
+      "default_os_name": "SourceOS",
+      "boot_object": "m1n1.bin",
+      "next_object": "m1n1/boot.bin",
+      "package": "https://github.com/SourceOS-Linux/source-os/releases/download/${TAG}/sourceos-${VERSION}-asahi-arm64.zip",
+      "sha256": "${PACKAGE_SHA256}",
+      "supported_fw": ["12.3", "12.3.1", "13.5", "14.4", "15.0", "15.1", "15.2"],
+      "partitions": [
+        {
+          "name": "EFI",
+          "type": "EFI",
+          "size": "500MB",
+          "format": "fat",
+          "volume_id": "0x2abf9f91",
+          "copy_firmware": true,
+          "copy_installer_data": true,
+          "source": "esp"
+        },
+        {
+          "name": "Boot",
+          "type": "Linux",
+          "size": "1GB",
+          "image": "boot.img"
+        },
+        {
+          "name": "Root",
+          "type": "Linux",
+          "expand": true,
+          "image": "root.img"
+        }
+      ]
+    }
+  ]
+}

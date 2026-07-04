@@ -47,8 +47,10 @@ Usage:
   sourceos fix all [apply|dry-run|revert] [--json] [--open|--write <path>]
   sourceos fix shell [apply|dry-run|revert] [--json] [--open|--write <path>]
   sourceos fix fish [apply|dry-run|revert] [--json] [--open|--write <path>]
-  sourceos doctor [--open]
+  sourceos doctor [--json|--open|--write <path>]
   sourceos status [--json|--open|--write <path>]
+  sourceos search [health|stats|index|service] [options]
+  sourceos search [--limit N] [--snippet] [--prompt] [--open|--write <path>] [query...]
   sourceos profile apply
   sourceos profile path
 
@@ -63,6 +65,10 @@ FIX_MODE="apply"
 FIX_JSON=0
 FIX_OPEN=0
 FIX_WRITE_PATH=""
+
+DOCTOR_JSON=0
+DOCTOR_OPEN=0
+DOCTOR_WRITE_PATH=""
 
 parse_fix_args(){
   FIX_MODE="apply"
@@ -101,6 +107,38 @@ parse_fix_args(){
   done
 }
 
+parse_doctor_args(){
+  DOCTOR_JSON=0
+  DOCTOR_OPEN=0
+  DOCTOR_WRITE_PATH=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json)
+        DOCTOR_JSON=1
+        shift
+        ;;
+      --open)
+        DOCTOR_OPEN=1
+        shift
+        ;;
+      --write)
+        shift
+        if [[ $# -eq 0 ]]; then
+          err "--write requires a path"
+          exit 2
+        fi
+        DOCTOR_WRITE_PATH="$1"
+        shift
+        ;;
+      *)
+        err "unknown doctor argument: $1 (use [--json|--open|--write <path>])"
+        exit 2
+        ;;
+    esac
+  done
+}
+
 fix_report_path(){
   local target=$1
   local mode=$2
@@ -108,6 +146,14 @@ fix_report_path(){
   d="$(cache_dir)"
   mkdir -p "$d"
   printf '%s/fix-%s-%s.json\n' "$d" "$target" "$mode"
+}
+
+doctor_report_path(){
+  local kind=$1
+  local d
+  d="$(cache_dir)"
+  mkdir -p "$d"
+  printf '%s/doctor.%s\n' "$d" "$kind"
 }
 
 write_text(){
@@ -123,24 +169,45 @@ write_text(){
 run_doctor(){
   local doc="$PROFILE_DIR/doctor.sh"
   [[ -x "$doc" ]] || { err "doctor not found: $doc"; exit 2; }
-  exec "$doc"
-}
 
-run_doctor_open(){
-  local doc="$PROFILE_DIR/doctor.sh"
-  [[ -x "$doc" ]] || { err "doctor not found: $doc"; exit 2; }
+  if [[ "$DOCTOR_JSON" == "0" && "$DOCTOR_OPEN" == "0" && -z "$DOCTOR_WRITE_PATH" ]]; then
+    exec "$doc"
+  fi
 
-  local d
-  d="$(cache_dir)"
-  mkdir -p "$d"
-  local out="$d/doctor.txt"
+  if [[ "$DOCTOR_JSON" == "0" && "$DOCTOR_OPEN" == "1" && -z "$DOCTOR_WRITE_PATH" ]]; then
+    local out_txt
+    out_txt="$(doctor_report_path txt)"
+    set +e
+    "$doc" >"$out_txt" 2>&1
+    local rc=$?
+    set -e
+    open_file "$out_txt"
+    exit "$rc"
+  fi
 
+  local out_json rc final_path=""
   set +e
-  "$doc" >"$out" 2>&1
-  local rc=$?
+  out_json="$($doc --json)"
+  rc=$?
   set -e
 
-  open_file "$out"
+  if [[ -n "$DOCTOR_WRITE_PATH" ]]; then
+    final_path="$DOCTOR_WRITE_PATH"
+  elif [[ "$DOCTOR_OPEN" == "1" ]]; then
+    final_path="$(doctor_report_path json)"
+  fi
+
+  if [[ -n "$final_path" ]]; then
+    write_text "$final_path" "$out_json"
+    if [[ "$DOCTOR_OPEN" == "1" ]]; then
+      open_file "$final_path"
+    fi
+  fi
+
+  if [[ "$DOCTOR_JSON" == "1" ]]; then
+    printf '%s\n' "$out_json"
+  fi
+
   exit "$rc"
 }
 
@@ -220,6 +287,68 @@ check_bin(){
   return 1
 }
 
+status_check_lampstand(){
+  local search_helper="$PROFILE_DIR/bin/sourceos-search.sh"
+
+  if [[ ! -f "$search_helper" ]]; then
+    WARNINGS+=("missing sourceos search helper: $search_helper")
+  fi
+
+  if check_bin lampstand; then
+    return 0
+  fi
+
+  if have python3 && python3 -c 'import lampstand.cli' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  WARNINGS+=("lampstand backend unavailable")
+}
+
+status_check_lampstand_unit(){
+  local helper="$PROFILE_DIR/bin/check-lampstand-unit.sh"
+  local out unit_file enabled active
+
+  if [[ ! -f "$helper" ]]; then
+    WARNINGS+=("missing lampstand unit helper: $helper")
+    return
+  fi
+
+  if ! out="$(bash "$helper" 2>/dev/null)"; then
+    WARNINGS+=("lampstand unit helper failed")
+    return
+  fi
+
+  unit_file="$(awk -F= '$1=="unit_file" {print $2}' <<<"$out" | tail -n1)"
+  enabled="$(awk -F= '$1=="enabled" {print $2}' <<<"$out" | tail -n1)"
+  active="$(awk -F= '$1=="active" {print $2}' <<<"$out" | tail -n1)"
+
+  [[ "$unit_file" == "present" ]] || WARNINGS+=("lampstand user unit file missing")
+  [[ "$enabled" == "yes" || "$enabled" == "unknown" ]] || WARNINGS+=("lampstand user unit not enabled")
+  [[ "$active" == "yes" || "$active" == "unknown" ]] || WARNINGS+=("lampstand user unit not active")
+}
+
+status_check_workstation_polish(){
+  local helper="$PROFILE_DIR/bin/check-workstation-polish.sh"
+  local out policy_ok
+
+  if [[ ! -f "$helper" ]]; then
+    WARNINGS+=("missing workstation polish helper: $helper")
+    return
+  fi
+
+  if ! out="$(bash "$helper" 2>/dev/null)"; then
+    WARNINGS+=("workstation polish helper failed")
+    return
+  fi
+
+  grep -Fqx 'mac_polish.helper=present' <<<"$out" || WARNINGS+=("mac polish helper missing")
+  grep -Fqx 'keyboard_policy.helper=present' <<<"$out" || WARNINGS+=("keyboard policy helper missing")
+
+  policy_ok="$(awk -F= '$1=="keyboard_policy.policy_ok" {print $2}' <<<"$out" | tail -n1)"
+  [[ "$policy_ok" == "yes" ]] || WARNINGS+=("keyboard policy is not valid")
+}
+
 status_collect(){
   REQUIRED_MISSING=()
   OPTIONAL_MISSING=()
@@ -244,6 +373,10 @@ status_collect(){
   if ! check_bin xclip; then
     OPTIONAL_MISSING+=("xclip")
   fi
+
+  status_check_lampstand
+  status_check_lampstand_unit
+  status_check_workstation_polish
 
   if gnome_detect; then
     if ! check_bin gsettings; then
@@ -371,6 +504,7 @@ status_write(){
 palette_menu(){
   # Print menu entries as: label<TAB>command
   cat <<'EOF'
+Palette: Audit doctor (open JSON report)	sourceos doctor --json --open
 Palette: Audit fix all (open report)	sourceos fix all dry-run --open
 Palette: Fix all configs (dry-run)	sourceos fix all dry-run
 Palette: Fix all configs (apply)	sourceos fix all apply
@@ -384,7 +518,14 @@ Palette: Fix fish config (dry-run)	sourceos fix fish dry-run
 Palette: Fix fish config (apply)	sourceos fix fish apply
 Palette: Revert fish config patch	sourceos fix fish revert
 Status (open report)	sourceos status --open
-Doctor (open report)	sourceos doctor --open
+Doctor (open text report)	sourceos doctor --open
+Search files (Lampstand)	sourceos search --prompt --snippet --open
+Lampstand health (open report)	sourceos search health --open
+Lampstand stats (open report)	sourceos search stats --open
+Lampstand index home	sourceos search index --root "$HOME"
+Lampstand service status	sourceos search service status --open
+Lampstand service restart	sourceos search service restart
+Lampstand service logs	sourceos search service logs --open
 Apply profile	sourceos profile apply
 Open sesh	sesh
 Open tmux	tmux
@@ -464,11 +605,8 @@ main(){
 
     doctor)
       shift || true
-      case "${1:-}" in
-        --open) run_doctor_open ;;
-        "") run_doctor ;;
-        *) run_doctor ;;
-      esac
+      parse_doctor_args "$@"
+      run_doctor
       ;;
 
     status)
@@ -495,6 +633,13 @@ main(){
           exit 2
           ;;
       esac
+      ;;
+
+    search)
+      shift || true
+      local search_helper="$PROFILE_DIR/bin/sourceos-search.sh"
+      [[ -f "$search_helper" ]] || { err "search helper missing: $search_helper"; exit 2; }
+      exec bash "$search_helper" "$@"
       ;;
 
     profile)

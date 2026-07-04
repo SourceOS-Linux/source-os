@@ -1,0 +1,94 @@
+name: workstation-mac-polish
+
+on:
+  pull_request:
+    paths:
+      - 'profiles/linux-dev/workstation-v0/bin/check-mac-polish.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/mac-screenshot.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/install-sourceos-cli.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/appearance-apply.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/files-sidebar.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/README.md'
+      - 'profiles/linux-dev/workstation-v0/manifest.yaml'
+      - 'docs/workstation/**'
+      - '.github/workflows/workstation-mac-polish.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'profiles/linux-dev/workstation-v0/bin/check-mac-polish.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/mac-screenshot.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/install-sourceos-cli.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/appearance-apply.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/files-sidebar.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/README.md'
+      - 'profiles/linux-dev/workstation-v0/manifest.yaml'
+      - 'docs/workstation/**'
+      - '.github/workflows/workstation-mac-polish.yml'
+
+jobs:
+  mac-polish-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check Mac polish scripts
+        run: |
+          set -euo pipefail
+          bash -n profiles/linux-dev/workstation-v0/bin/check-mac-polish.sh
+          bash -n profiles/linux-dev/workstation-v0/bin/mac-screenshot.sh
+          bash -n profiles/linux-dev/workstation-v0/bin/install-sourceos-cli.sh
+          bash -n profiles/linux-dev/workstation-v0/gnome/appearance-apply.sh
+          bash -n profiles/linux-dev/workstation-v0/gnome/files-sidebar.sh
+          bash -n profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh
+
+      - name: Smoke: installer writes user wrappers
+        run: |
+          set -euo pipefail
+          installer='profiles/linux-dev/workstation-v0/bin/install-sourceos-cli.sh'
+          tmp_home=$(mktemp -d)
+          HOME="$tmp_home" bash "$installer"
+          test -x "$tmp_home/.local/bin/sourceos"
+          test -x "$tmp_home/.local/bin/mac-screenshot.sh"
+          test -s "$tmp_home/.config/sourceos/profile.path"
+
+      - name: Smoke: sidebar helper writes bookmarks
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/gnome/files-sidebar.sh'
+          tmp_home=$(mktemp -d)
+          HOME="$tmp_home" XDG_CONFIG_HOME="$tmp_home/.config" bash "$helper"
+          bookmarks="$tmp_home/.config/gtk-3.0/bookmarks"
+          test -s "$bookmarks"
+          grep -F 'Documents' "$bookmarks" >/dev/null
+          grep -F 'Screenshots' "$bookmarks" >/dev/null
+
+      - name: Smoke: Mac polish check helper reports expected keys
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/check-mac-polish.sh'
+          stub_bin=$(mktemp -d)
+          tmp_home=$(mktemp -d)
+          mkdir -p "$tmp_home/Pictures/Screenshots"
+          cat > "$stub_bin/gnome-screenshot" <<'EOF'
+          #!/usr/bin/env bash
+          exit 0
+          EOF
+          cat > "$stub_bin/sushi" <<'EOF'
+          #!/usr/bin/env bash
+          exit 0
+          EOF
+          cat > "$stub_bin/mac-screenshot.sh" <<'EOF'
+          #!/usr/bin/env bash
+          exit 0
+          EOF
+          chmod +x "$stub_bin/gnome-screenshot" "$stub_bin/sushi" "$stub_bin/mac-screenshot.sh"
+          out=$(HOME="$tmp_home" PATH="$stub_bin:$PATH" bash "$helper")
+          grep -F 'screenshot_helper=present' <<<"$out" >/dev/null
+          grep -F 'screenshot_wrapper=present' <<<"$out" >/dev/null
+          grep -F 'gnome_screenshot=present' <<<"$out" >/dev/null
+          grep -F 'sushi=present' <<<"$out" >/dev/null
+          grep -F 'screenshot_dir=present' <<<"$out" >/dev/null
