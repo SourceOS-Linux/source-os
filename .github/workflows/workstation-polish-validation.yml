@@ -6,6 +6,8 @@ on:
       - 'profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh'
       - 'profiles/linux-dev/workstation-v0/bin/check-mac-polish.sh'
       - 'profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/check-shortcut-map-contract.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/check-gnome-dock-extension.sh'
       - '.github/workflows/workstation-polish-validation.yml'
   push:
     branches:
@@ -14,6 +16,8 @@ on:
       - 'profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh'
       - 'profiles/linux-dev/workstation-v0/bin/check-mac-polish.sh'
       - 'profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/check-shortcut-map-contract.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/check-gnome-dock-extension.sh'
       - '.github/workflows/workstation-polish-validation.yml'
 
 jobs:
@@ -23,14 +27,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Syntax check aggregate helper
+      - name: Syntax check aggregate helper and source helpers
         run: |
           set -euo pipefail
           bash -n profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh
           bash -n profiles/linux-dev/workstation-v0/bin/check-mac-polish.sh
           bash -n profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh
+          bash -n profiles/linux-dev/workstation-v0/bin/check-shortcut-map-contract.sh
+          bash -n profiles/linux-dev/workstation-v0/bin/check-gnome-dock-extension.sh
 
-      - name: Smoke: aggregate helper prefixes Mac and keyboard policy outputs
+      - name: Smoke: aggregate helper prefixes all workstation polish outputs
         run: |
           set -euo pipefail
           helper='profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh'
@@ -53,7 +59,26 @@ jobs:
           #!/usr/bin/env bash
           exit 0
           EOF
-          chmod +x "$stub_bin/gnome-screenshot" "$stub_bin/sushi" "$stub_bin/mac-screenshot.sh" "$stub_bin/input-remapper-control"
+          cat > "$stub_bin/gnome-extensions" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [ "${1:-}" = list ]; then
+            printf 'dash-to-dock@micxgx.gmail.com\n'
+            printf 'appindicatorsupport@rgcjonas.gmail.com\n'
+            exit 0
+          fi
+          exit 2
+          EOF
+          cat > "$stub_bin/gsettings" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [ "${1:-}" = get ] && [ "${2:-}" = org.gnome.shell ] && [ "${3:-}" = favorite-apps ]; then
+            printf "['org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop']\n"
+            exit 0
+          fi
+          exit 2
+          EOF
+          chmod +x "$stub_bin/gnome-screenshot" "$stub_bin/sushi" "$stub_bin/mac-screenshot.sh" "$stub_bin/input-remapper-control" "$stub_bin/gnome-extensions" "$stub_bin/gsettings"
 
           out=$(HOME="$tmp_home" XDG_CONFIG_HOME="$tmp_home/.config" PATH="$stub_bin:$PATH" bash "$helper")
           grep -F 'mac_polish.helper=present' <<<"$out" >/dev/null
@@ -65,3 +90,13 @@ jobs:
           grep -F 'keyboard_policy.primary_backend=input-remapper' <<<"$out" >/dev/null
           grep -F 'keyboard_policy.selected_backend_available=present' <<<"$out" >/dev/null
           grep -F 'keyboard_policy.policy_ok=yes' <<<"$out" >/dev/null
+          grep -F 'shortcut_map.helper=present' <<<"$out" >/dev/null
+          grep -F 'shortcut_map.shortcut_map=present' <<<"$out" >/dev/null
+          grep -F 'shortcut_map.active_palette=present' <<<"$out" >/dev/null
+          grep -F 'shortcut_map.active_screenshot_screen=present' <<<"$out" >/dev/null
+          grep -F 'shortcut_map.non_goal_marker=present' <<<"$out" >/dev/null
+          grep -F 'gnome_dock.helper=present' <<<"$out" >/dev/null
+          grep -F 'gnome_dock.gnome_extensions=present' <<<"$out" >/dev/null
+          grep -F 'gnome_dock.dash_to_dock=present' <<<"$out" >/dev/null
+          grep -F 'gnome_dock.appindicator=present' <<<"$out" >/dev/null
+          grep -F 'gnome_dock.gnome_dock_extension_lane_ok=yes' <<<"$out" >/dev/null

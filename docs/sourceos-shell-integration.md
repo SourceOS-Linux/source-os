@@ -11,6 +11,7 @@ This repository, `source-os`, carries the Linux realization surfaces required to
 - Nix/NixOS modules
 - profile wiring
 - machine-level integration hooks
+- derive-service runtime integration such as `docd`
 
 ## What does not belong here
 
@@ -22,5 +23,5 @@ This repository, `source-os`, carries the Linux realization surfaces required to
 
 - `SourceOS-Linux/sourceos-shell` — product/runtime
 - `SourceOS-Linux/sourceos-spec` — shared contracts
-- `SociOS-Linux/source-os` — Linux realization
+- `SourceOS-Linux/source-os` — Linux realization
 - `SociOS-Linux/albert` — temporary launcher bridge only

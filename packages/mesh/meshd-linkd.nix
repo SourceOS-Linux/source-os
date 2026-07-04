@@ -25,12 +25,12 @@ writeShellApplication {
     done
 
     case "$RPC" in
-      unix:*) RPC_PATH="${RPC#unix:}" ;;
+      unix:*) RPC_PATH="''${RPC#unix:}" ;;
       *) echo "meshd-linkd: --rpc must be a unix: URI" >&2; exit 2 ;;
     esac
 
     case "$CONTROL" in
-      unix:*) CONTROL_PATH="${CONTROL#unix:}" ;;
+      unix:*) CONTROL_PATH="''${CONTROL#unix:}" ;;
       *) echo "meshd-linkd: --control must be a unix: URI" >&2; exit 2 ;;
     esac
 
