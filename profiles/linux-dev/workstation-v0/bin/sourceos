@@ -1,0 +1,671 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# SourceOS workstation helper (linux-dev/workstation-v0)
+# Dependency-light command surface intended to be callable from a launcher.
+
+PROFILE_DIR_DEFAULT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROFILE_DIR="${SOURCEOS_PROFILE_DIR:-$PROFILE_DIR_DEFAULT}"
+
+err(){ printf "ERROR: %s\n" "$*" >&2; }
+info(){ printf "INFO: %s\n" "$*" >&2; }
+warn(){ printf "WARN: %s\n" "$*" >&2; }
+
+have(){ command -v "$1" >/dev/null 2>&1; }
+
+cache_dir(){
+  echo "${XDG_CACHE_HOME:-$HOME/.cache}/sourceos"
+}
+
+json_escape(){
+  local s=${1:-}
+  s=${s//\\/\\\\}
+  s=${s//"/\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  printf '%s' "$s"
+}
+
+open_file(){
+  local p=$1
+  if have xdg-open; then
+    xdg-open "$p" >/dev/null 2>&1 || true
+  elif have open; then
+    open "$p" >/dev/null 2>&1 || true
+  else
+    warn "no opener found (xdg-open/open); wrote: $p"
+  fi
+}
+
+usage(){
+  cat <<EOF
+sourceos (workstation helper)
+
+Usage:
+  sourceos palette
+  sourceos fix all [apply|dry-run|revert] [--json] [--open|--write <path>]
+  sourceos fix shell [apply|dry-run|revert] [--json] [--open|--write <path>]
+  sourceos fix fish [apply|dry-run|revert] [--json] [--open|--write <path>]
+  sourceos doctor [--json|--open|--write <path>]
+  sourceos status [--json|--open|--write <path>]
+  sourceos search [health|stats|index|service] [options]
+  sourceos search [--limit N] [--snippet] [--prompt] [--open|--write <path>] [query...]
+  sourceos profile apply
+  sourceos profile path
+
+Env:
+  SOURCEOS_PROFILE_DIR   Override profile directory (default: $PROFILE_DIR_DEFAULT)
+  SOURCEOS_RC_FILES      Test hook for patch-shell.sh
+  SOURCEOS_FISH_CONFIG   Test hook for patch-fish.sh
+EOF
+}
+
+FIX_MODE="apply"
+FIX_JSON=0
+FIX_OPEN=0
+FIX_WRITE_PATH=""
+
+DOCTOR_JSON=0
+DOCTOR_OPEN=0
+DOCTOR_WRITE_PATH=""
+
+parse_fix_args(){
+  FIX_MODE="apply"
+  FIX_JSON=0
+  FIX_OPEN=0
+  FIX_WRITE_PATH=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      apply|dry-run|revert)
+        FIX_MODE="$1"
+        shift
+        ;;
+      --json)
+        FIX_JSON=1
+        shift
+        ;;
+      --open)
+        FIX_OPEN=1
+        shift
+        ;;
+      --write)
+        shift
+        if [[ $# -eq 0 ]]; then
+          err "--write requires a path"
+          exit 2
+        fi
+        FIX_WRITE_PATH="$1"
+        shift
+        ;;
+      *)
+        err "unknown fix argument: $1 (use apply|dry-run|revert [--json] [--open|--write <path>])"
+        exit 2
+        ;;
+    esac
+  done
+}
+
+parse_doctor_args(){
+  DOCTOR_JSON=0
+  DOCTOR_OPEN=0
+  DOCTOR_WRITE_PATH=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --json)
+        DOCTOR_JSON=1
+        shift
+        ;;
+      --open)
+        DOCTOR_OPEN=1
+        shift
+        ;;
+      --write)
+        shift
+        if [[ $# -eq 0 ]]; then
+          err "--write requires a path"
+          exit 2
+        fi
+        DOCTOR_WRITE_PATH="$1"
+        shift
+        ;;
+      *)
+        err "unknown doctor argument: $1 (use [--json|--open|--write <path>])"
+        exit 2
+        ;;
+    esac
+  done
+}
+
+fix_report_path(){
+  local target=$1
+  local mode=$2
+  local d
+  d="$(cache_dir)"
+  mkdir -p "$d"
+  printf '%s/fix-%s-%s.json\n' "$d" "$target" "$mode"
+}
+
+doctor_report_path(){
+  local kind=$1
+  local d
+  d="$(cache_dir)"
+  mkdir -p "$d"
+  printf '%s/doctor.%s\n' "$d" "$kind"
+}
+
+write_text(){
+  local path=$1
+  local text=$2
+  local dir
+  dir="$(dirname "$path")"
+  mkdir -p "$dir"
+  printf '%s\n' "$text" > "$path"
+  info "wrote: $path"
+}
+
+run_doctor(){
+  local doc="$PROFILE_DIR/doctor.sh"
+  [[ -x "$doc" ]] || { err "doctor not found: $doc"; exit 2; }
+
+  if [[ "$DOCTOR_JSON" == "0" && "$DOCTOR_OPEN" == "0" && -z "$DOCTOR_WRITE_PATH" ]]; then
+    exec "$doc"
+  fi
+
+  if [[ "$DOCTOR_JSON" == "0" && "$DOCTOR_OPEN" == "1" && -z "$DOCTOR_WRITE_PATH" ]]; then
+    local out_txt
+    out_txt="$(doctor_report_path txt)"
+    set +e
+    "$doc" >"$out_txt" 2>&1
+    local rc=$?
+    set -e
+    open_file "$out_txt"
+    exit "$rc"
+  fi
+
+  local out_json rc final_path=""
+  set +e
+  out_json="$($doc --json)"
+  rc=$?
+  set -e
+
+  if [[ -n "$DOCTOR_WRITE_PATH" ]]; then
+    final_path="$DOCTOR_WRITE_PATH"
+  elif [[ "$DOCTOR_OPEN" == "1" ]]; then
+    final_path="$(doctor_report_path json)"
+  fi
+
+  if [[ -n "$final_path" ]]; then
+    write_text "$final_path" "$out_json"
+    if [[ "$DOCTOR_OPEN" == "1" ]]; then
+      open_file "$final_path"
+    fi
+  fi
+
+  if [[ "$DOCTOR_JSON" == "1" ]]; then
+    printf '%s\n' "$out_json"
+  fi
+
+  exit "$rc"
+}
+
+run_apply(){
+  local inst="$PROFILE_DIR/install.sh"
+  [[ -x "$inst" ]] || { err "installer not found: $inst"; exit 2; }
+  exec "$inst"
+}
+
+profile_path(){
+  echo "$PROFILE_DIR"
+}
+
+run_fix_helper(){
+  local target=$1
+  local mode=$2
+  local json=$3
+  local open=$4
+  local write_path=$5
+  local s="$PROFILE_DIR/bin/patch-${target}.sh"
+
+  [[ -x "$s" ]] || { err "patch-${target} helper missing: $s"; exit 2; }
+
+  if [[ "$json" == "0" && "$open" == "0" && -z "$write_path" ]]; then
+    exec "$s" "$mode"
+  fi
+
+  local out rc final_path=""
+  set +e
+  out="$($s "$mode" --json)"
+  rc=$?
+  set -e
+
+  if [[ -n "$write_path" ]]; then
+    final_path="$write_path"
+  elif [[ "$open" == "1" ]]; then
+    final_path="$(fix_report_path "$target" "$mode")"
+  fi
+
+  if [[ -n "$final_path" ]]; then
+    write_text "$final_path" "$out"
+    if [[ "$open" == "1" ]]; then
+      open_file "$final_path"
+    fi
+  fi
+
+  if [[ "$json" == "1" ]]; then
+    printf '%s\n' "$out"
+  fi
+
+  exit "$rc"
+}
+
+run_fix_all(){
+  run_fix_helper all "$1" "$2" "$3" "$4"
+}
+
+run_fix_shell(){
+  run_fix_helper shell "$1" "$2" "$3" "$4"
+}
+
+run_fix_fish(){
+  run_fix_helper fish "$1" "$2" "$3" "$4"
+}
+
+gnome_detect(){
+  [[ "${XDG_CURRENT_DESKTOP:-}" == *GNOME* ]] && return 0
+  [[ "${DESKTOP_SESSION:-}" == *gnome* ]] && return 0
+  return 1
+}
+
+check_bin(){
+  local bin=$1
+  if have "$bin"; then
+    return 0
+  fi
+  return 1
+}
+
+status_check_lampstand(){
+  local search_helper="$PROFILE_DIR/bin/sourceos-search.sh"
+
+  if [[ ! -f "$search_helper" ]]; then
+    WARNINGS+=("missing sourceos search helper: $search_helper")
+  fi
+
+  if check_bin lampstand; then
+    return 0
+  fi
+
+  if have python3 && python3 -c 'import lampstand.cli' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  WARNINGS+=("lampstand backend unavailable")
+}
+
+status_check_lampstand_unit(){
+  local helper="$PROFILE_DIR/bin/check-lampstand-unit.sh"
+  local out unit_file enabled active
+
+  if [[ ! -f "$helper" ]]; then
+    WARNINGS+=("missing lampstand unit helper: $helper")
+    return
+  fi
+
+  if ! out="$(bash "$helper" 2>/dev/null)"; then
+    WARNINGS+=("lampstand unit helper failed")
+    return
+  fi
+
+  unit_file="$(awk -F= '$1=="unit_file" {print $2}' <<<"$out" | tail -n1)"
+  enabled="$(awk -F= '$1=="enabled" {print $2}' <<<"$out" | tail -n1)"
+  active="$(awk -F= '$1=="active" {print $2}' <<<"$out" | tail -n1)"
+
+  [[ "$unit_file" == "present" ]] || WARNINGS+=("lampstand user unit file missing")
+  [[ "$enabled" == "yes" || "$enabled" == "unknown" ]] || WARNINGS+=("lampstand user unit not enabled")
+  [[ "$active" == "yes" || "$active" == "unknown" ]] || WARNINGS+=("lampstand user unit not active")
+}
+
+status_check_workstation_polish(){
+  local helper="$PROFILE_DIR/bin/check-workstation-polish.sh"
+  local out policy_ok
+
+  if [[ ! -f "$helper" ]]; then
+    WARNINGS+=("missing workstation polish helper: $helper")
+    return
+  fi
+
+  if ! out="$(bash "$helper" 2>/dev/null)"; then
+    WARNINGS+=("workstation polish helper failed")
+    return
+  fi
+
+  grep -Fqx 'mac_polish.helper=present' <<<"$out" || WARNINGS+=("mac polish helper missing")
+  grep -Fqx 'keyboard_policy.helper=present' <<<"$out" || WARNINGS+=("keyboard policy helper missing")
+
+  policy_ok="$(awk -F= '$1=="keyboard_policy.policy_ok" {print $2}' <<<"$out" | tail -n1)"
+  [[ "$policy_ok" == "yes" ]] || WARNINGS+=("keyboard policy is not valid")
+}
+
+status_collect(){
+  REQUIRED_MISSING=()
+  OPTIONAL_MISSING=()
+  WARNINGS=()
+
+  local required=(
+    git ssh podman toolbox wl-copy jq
+    brew sourceos
+    fzf atuin bat zoxide eza yazi gum direnv rg fd tmux
+    lazygit gh tig
+    sesh procs sd entr curlie
+    jnv gojq
+    rclone mc rsync
+  )
+
+  for b in "${required[@]}"; do
+    if ! check_bin "$b"; then
+      REQUIRED_MISSING+=("$b")
+    fi
+  done
+
+  if ! check_bin xclip; then
+    OPTIONAL_MISSING+=("xclip")
+  fi
+
+  status_check_lampstand
+  status_check_lampstand_unit
+  status_check_workstation_polish
+
+  if gnome_detect; then
+    if ! check_bin gsettings; then
+      WARNINGS+=("gsettings missing")
+    fi
+
+    if check_bin gnome-extensions; then
+      if ! gnome-extensions list 2>/dev/null | grep -qx 'dash-to-dock@micxgx.gmail.com'; then
+        WARNINGS+=("missing gnome extension: dash-to-dock@micxgx.gmail.com")
+      fi
+      if ! gnome-extensions list 2>/dev/null | grep -qx 'appindicatorsupport@rgcjonas.gmail.com'; then
+        WARNINGS+=("missing gnome extension: appindicatorsupport@rgcjonas.gmail.com")
+      fi
+    else
+      WARNINGS+=("gnome-extensions missing")
+    fi
+  fi
+}
+
+status_json(){
+  status_collect
+
+  local ok=true
+  if (( ${#REQUIRED_MISSING[@]} > 0 )); then
+    ok=false
+  fi
+
+  local profile="linux-dev/workstation-v0"
+
+  local gnome=false
+  if gnome_detect; then gnome=true; fi
+
+  printf '{'
+  printf '"profile":"%s"' "$(json_escape "$profile")"
+  printf ',"ok":%s' "$ok"
+  printf ',"gnome":%s' "$gnome"
+
+  printf ',"required_missing":['
+  for ((i=0;i<${#REQUIRED_MISSING[@]};i++)); do
+    [[ $i -gt 0 ]] && printf ','
+    printf '"%s"' "$(json_escape "${REQUIRED_MISSING[$i]}")"
+  done
+  printf ']'
+
+  printf ',"optional_missing":['
+  for ((i=0;i<${#OPTIONAL_MISSING[@]};i++)); do
+    [[ $i -gt 0 ]] && printf ','
+    printf '"%s"' "$(json_escape "${OPTIONAL_MISSING[$i]}")"
+  done
+  printf ']'
+
+  printf ',"warnings":['
+  for ((i=0;i<${#WARNINGS[@]};i++)); do
+    [[ $i -gt 0 ]] && printf ','
+    printf '"%s"' "$(json_escape "${WARNINGS[$i]}")"
+  done
+  printf ']'
+
+  printf '}'
+  printf '\n'
+
+  if [[ "$ok" == "true" ]]; then
+    return 0
+  fi
+  return 2
+}
+
+status_human(){
+  status_collect
+
+  if (( ${#REQUIRED_MISSING[@]} == 0 )); then
+    info "status: OK"
+  else
+    err "status: FAIL"
+    err "missing required: ${REQUIRED_MISSING[*]}"
+    return 2
+  fi
+
+  if (( ${#OPTIONAL_MISSING[@]} > 0 )); then
+    warn "missing optional: ${OPTIONAL_MISSING[*]}"
+  fi
+
+  if (( ${#WARNINGS[@]} > 0 )); then
+    warn "warnings:"
+    for w in "${WARNINGS[@]}"; do
+      warn "- $w"
+    done
+  fi
+
+  return 0
+}
+
+status_open(){
+  local d
+  d="$(cache_dir)"
+  mkdir -p "$d"
+  local out="$d/status.json"
+
+  set +e
+  status_json >"$out" 2>/dev/null
+  local rc=$?
+  set -e
+
+  open_file "$out"
+  exit "$rc"
+}
+
+status_write(){
+  local path=$1
+  [[ -n "$path" ]] || { err "--write requires a path"; exit 2; }
+
+  local dir
+  dir="$(dirname "$path")"
+  mkdir -p "$dir"
+
+  set +e
+  status_json >"$path" 2>/dev/null
+  local rc=$?
+  set -e
+
+  info "wrote: $path"
+  exit "$rc"
+}
+
+palette_menu(){
+  # Print menu entries as: label<TAB>command
+  cat <<'EOF'
+Palette: Audit doctor (open JSON report)	sourceos doctor --json --open
+Palette: Audit fix all (open report)	sourceos fix all dry-run --open
+Palette: Fix all configs (dry-run)	sourceos fix all dry-run
+Palette: Fix all configs (apply)	sourceos fix all apply
+Palette: Revert all config patches	sourceos fix all revert
+Palette: Audit shell patch (open report)	sourceos fix shell dry-run --open
+Palette: Fix shell rc (dry-run)	sourceos fix shell dry-run
+Palette: Fix shell rc (apply)	sourceos fix shell apply
+Palette: Revert shell rc patch	sourceos fix shell revert
+Palette: Audit fish patch (open report)	sourceos fix fish dry-run --open
+Palette: Fix fish config (dry-run)	sourceos fix fish dry-run
+Palette: Fix fish config (apply)	sourceos fix fish apply
+Palette: Revert fish config patch	sourceos fix fish revert
+Status (open report)	sourceos status --open
+Doctor (open text report)	sourceos doctor --open
+Search files (Lampstand)	sourceos search --prompt --snippet --open
+Lampstand health (open report)	sourceos search health --open
+Lampstand stats (open report)	sourceos search stats --open
+Lampstand index home	sourceos search index --root "$HOME"
+Lampstand service status	sourceos search service status --open
+Lampstand service restart	sourceos search service restart
+Lampstand service logs	sourceos search service logs --open
+Apply profile	sourceos profile apply
+Open sesh	sesh
+Open tmux	tmux
+Open k9s	k9s
+Open lazygit	lazygit
+Open lazydocker	lazydocker
+Open yazi	yazi
+EOF
+}
+
+palette_select(){
+  # Prefer Wayland-first fuzzel, then wofi, then rofi, then terminal fzf.
+  if have fuzzel; then
+    palette_menu | fuzzel --dmenu --prompt 'sourceos> ' | awk -F '\t' '{print $2}'
+    return
+  fi
+  if have wofi; then
+    palette_menu | wofi --dmenu --prompt 'sourceos> ' | awk -F '\t' '{print $2}'
+    return
+  fi
+  if have rofi; then
+    palette_menu | rofi -dmenu -p 'sourceos> ' | awk -F '\t' '{print $2}'
+    return
+  fi
+  if have fzf; then
+    palette_menu | fzf --with-nth=1 --delimiter=$'\t' --prompt='sourceos> ' | awk -F '\t' '{print $2}'
+    return
+  fi
+
+  err "no launcher found (fuzzel/wofi/rofi/fzf)"
+  return 2
+}
+
+run_palette(){
+  local cmd
+  cmd="$(palette_select || true)"
+  [[ -n "$cmd" ]] || exit 0
+  exec bash -lc "$cmd"
+}
+
+main(){
+  local cmd=${1:-}
+  case "$cmd" in
+    -h|--help|help|"")
+      usage
+      ;;
+
+    palette)
+      run_palette
+      ;;
+
+    fix)
+      shift || true
+      case "${1:-}" in
+        all)
+          shift || true
+          parse_fix_args "$@"
+          run_fix_all "$FIX_MODE" "$FIX_JSON" "$FIX_OPEN" "$FIX_WRITE_PATH"
+          ;;
+        shell)
+          shift || true
+          parse_fix_args "$@"
+          run_fix_shell "$FIX_MODE" "$FIX_JSON" "$FIX_OPEN" "$FIX_WRITE_PATH"
+          ;;
+        fish)
+          shift || true
+          parse_fix_args "$@"
+          run_fix_fish "$FIX_MODE" "$FIX_JSON" "$FIX_OPEN" "$FIX_WRITE_PATH"
+          ;;
+        *)
+          err "unknown fix target: ${1:-}"
+          usage
+          exit 2
+          ;;
+      esac
+      ;;
+
+    doctor)
+      shift || true
+      parse_doctor_args "$@"
+      run_doctor
+      ;;
+
+    status)
+      shift || true
+      case "${1:-}" in
+        --json)
+          shift || true
+          status_json
+          ;;
+        --open)
+          shift || true
+          status_open
+          ;;
+        --write)
+          shift || true
+          status_write "${1:-}"
+          ;;
+        "")
+          status_human
+          ;;
+        *)
+          err "unknown status flag: ${1:-}"
+          usage
+          exit 2
+          ;;
+      esac
+      ;;
+
+    search)
+      shift || true
+      local search_helper="$PROFILE_DIR/bin/sourceos-search.sh"
+      [[ -f "$search_helper" ]] || { err "search helper missing: $search_helper"; exit 2; }
+      exec bash "$search_helper" "$@"
+      ;;
+
+    profile)
+      shift || true
+      local sub=${1:-}
+      case "$sub" in
+        apply)
+          run_apply
+          ;;
+        path)
+          profile_path
+          ;;
+        *)
+          err "unknown profile subcommand: $sub"
+          usage
+          exit 2
+          ;;
+      esac
+      ;;
+
+    *)
+      err "unknown command: $cmd"
+      usage
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

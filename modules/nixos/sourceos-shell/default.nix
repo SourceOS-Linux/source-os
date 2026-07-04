@@ -38,14 +38,14 @@ in
 
     searchProvider = {
       mode = lib.mkOption {
-        type = lib.types.enum [ "linux-native" "launcher-bridge" "shell-native" ];
-        default = "launcher-bridge";
+        type = lib.types.enum [ "linux-native" "command-bus" "shell-native" ];
+        default = "command-bus";
         description = "Search routing mode during shell rollout.";
       };
 
       linuxFileProvider = lib.mkOption {
-        type = lib.types.enum [ "tracker3" "fd" "locate" ];
-        default = "tracker3";
+        type = lib.types.enum [ "lampstand" "fd" "locate" ];
+        default = "lampstand";
         description = "Linux-native file search provider used when scope=files.";
       };
     };
@@ -63,6 +63,21 @@ in
       searchProvider.linuxFileProvider=${cfg.searchProvider.linuxFileProvider}
     '';
 
+    environment.etc."sourceos-shell/pdf-stack.json".text = builtins.toJSON {
+      derive = {
+        service = "sourceos-docd";
+        port = cfg.docdPort;
+      };
+      secure = {
+        service = "sourceos-pdf-secure";
+        port = cfg.pdfSecurePort;
+      };
+      invariants = [
+        "artifact_manifest_required"
+        "signed_and_validation_reports_flow_from_runtime"
+      ];
+    };
+
     environment.etc."sourceos-shell/search-provider.json".text = builtins.toJSON {
       mode = cfg.searchProvider.mode;
       linuxFileProvider = cfg.searchProvider.linuxFileProvider;
@@ -72,52 +87,73 @@ in
         files = "linux-native-only";
         web = "browser-agent";
       };
+      notes = [
+        "Lampstand is the Linux-native file authority for scope=files."
+        "The command bus remains a frontend and must not perform a second file-search pass."
+      ];
     };
 
-    systemd.targets.sourceos-shell = {
-      description = "SourceOS shell service graph";
-      wants = [ "sourceos-shell.service" "sourceos-router.service" "sourceos-pdf-secure.service" "sourceos-docd.service" ];
-      after = [ "network-online.target" ];
-      wantedBy = [ "multi-user.target" ];
-    };
+    # Services are gated on the runtime binary existing at packageRoot.
+    # They are inert before the sourceos-shell runtime package is deployed
+    # (e.g. via Katello content). Same ConditionPathExists pattern as harmonia.
 
     systemd.services.sourceos-shell = {
-      description = "SourceOS shell runtime scaffold";
+      description = "SourceOS shell runtime";
       wantedBy = [ "multi-user.target" ];
-      partOf = [ "sourceos-shell.target" ];
+      after = [ "network.target" ];
+      unitConfig.ConditionPathExists = "${cfg.packageRoot}/bin/sourceos-shell";
       serviceConfig = {
-        Type = "simple";
-        ExecStart = "${pkgs.coreutils}/bin/echo sourceos-shell runtime placeholder root=${cfg.packageRoot} port=${toString cfg.shellPort}";
+        Type = "exec";
+        ExecStart = "${cfg.packageRoot}/bin/sourceos-shell --port ${toString cfg.shellPort}";
+        Restart = "on-failure";
+        RestartSec = "5s";
+        DynamicUser = true;
+        BindReadOnlyPaths = [ "/etc/sourceos-shell" ];
       };
     };
 
     systemd.services.sourceos-router = {
-      description = "SourceOS shell router scaffold";
+      description = "SourceOS shell router bridge";
       wantedBy = [ "multi-user.target" ];
-      partOf = [ "sourceos-shell.target" ];
+      after = [ "network.target" ];
+      unitConfig.ConditionPathExists = "${cfg.packageRoot}/bin/sourceos-router";
       serviceConfig = {
-        Type = "simple";
-        ExecStart = "${pkgs.coreutils}/bin/echo sourceos-router placeholder port=${toString cfg.routerPort}";
+        Type = "exec";
+        ExecStart = "${cfg.packageRoot}/bin/sourceos-router --port ${toString cfg.routerPort}";
+        Restart = "on-failure";
+        RestartSec = "5s";
+        DynamicUser = true;
+        BindReadOnlyPaths = [ "/etc/sourceos-shell" ];
       };
     };
 
     systemd.services.sourceos-pdf-secure = {
-      description = "SourceOS shell pdf-secure scaffold";
+      description = "SourceOS shell pdf-secure service";
       wantedBy = [ "multi-user.target" ];
-      partOf = [ "sourceos-shell.target" ];
+      after = [ "network.target" ];
+      unitConfig.ConditionPathExists = "${cfg.packageRoot}/bin/sourceos-pdf-secure";
       serviceConfig = {
-        Type = "simple";
-        ExecStart = "${pkgs.coreutils}/bin/echo sourceos-pdf-secure placeholder port=${toString cfg.pdfSecurePort}";
+        Type = "exec";
+        ExecStart = "${cfg.packageRoot}/bin/sourceos-pdf-secure --port ${toString cfg.pdfSecurePort}";
+        Restart = "on-failure";
+        RestartSec = "5s";
+        DynamicUser = true;
+        BindReadOnlyPaths = [ "/etc/sourceos-shell" ];
       };
     };
 
     systemd.services.sourceos-docd = {
-      description = "SourceOS shell docd scaffold";
+      description = "SourceOS shell docd derive service";
       wantedBy = [ "multi-user.target" ];
-      partOf = [ "sourceos-shell.target" ];
+      after = [ "network.target" ];
+      unitConfig.ConditionPathExists = "${cfg.packageRoot}/bin/sourceos-docd";
       serviceConfig = {
-        Type = "simple";
-        ExecStart = "${pkgs.coreutils}/bin/echo sourceos-docd placeholder port=${toString cfg.docdPort}";
+        Type = "exec";
+        ExecStart = "${cfg.packageRoot}/bin/sourceos-docd --port ${toString cfg.docdPort}";
+        Restart = "on-failure";
+        RestartSec = "5s";
+        DynamicUser = true;
+        BindReadOnlyPaths = [ "/etc/sourceos-shell" ];
       };
     };
   };

@@ -1,0 +1,21 @@
+# GNOME extension pinset for workstation-v0 (linux-dev)
+#
+# This file is documentation-first in v0; the installer script uses the same IDs.
+
+extensions:
+  - id: dash-to-dock@micxgx.gmail.com
+    packages:
+      fedora:
+        - gnome-shell-extension-dash-to-dock
+    defaults:
+      schema: org.gnome.shell.extensions.dash-to-dock
+      settings:
+        dock-position: "BOTTOM"
+        autohide: true
+        intellihide: true
+        dash-max-icon-size: 36
+
+  - id: appindicatorsupport@rgcjonas.gmail.com
+    packages:
+      fedora:
+        - gnome-shell-extension-appindicator

@@ -1,13 +1,13 @@
 [Unit]
-Description=SourceOS docd derive service
+Description=SourceOS shell docd scaffold
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/sourceos-shell/bin/sourceos-docd
+ExecStart=/usr/bin/env sh -c 'echo sourceos-docd placeholder'
 Restart=on-failure
-RestartSec=2s
+RestartSec=2
 
 [Install]
 WantedBy=multi-user.target

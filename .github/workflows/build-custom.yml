@@ -1,0 +1,89 @@
+# build-custom — build a user-customized SourceOS image from a spec.
+# Dispatched by the socioprophet backend (self-serve image builder, free tier).
+# Builds the ISO on GitHub's runners (x86_64 or native ARM) and uploads it +
+# a status marker to the per-user GCS prefix the backend polls.
+name: build-custom
+
+on:
+  workflow_dispatch:
+    inputs:
+      spec:
+        description: 'Build spec JSON (edition, arch, hostname, packages, ...)'
+        required: true
+        type: string
+      uid:
+        description: 'Owning user id'
+        required: true
+        type: string
+      build_id:
+        description: 'Build id (Firestore doc id)'
+        required: true
+        type: string
+      target:
+        description: 'Artifact target'
+        required: false
+        default: 'iso'
+        type: choice
+        options: [iso, netboot]
+
+env:
+  GCS_BUCKET: sourceos-artifacts-socioprophet
+
+jobs:
+  build:
+    # Native runner per requested arch (free on public repo).
+    runs-on: ${{ fromJSON(github.event.inputs.spec).arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    timeout-minutes: 120
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true; df -h
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Mark building
+        run: |
+          PREFIX="gs://${GCS_BUCKET}/user-builds/${{ github.event.inputs.uid }}/${{ github.event.inputs.build_id }}"
+          echo '{"status":"building","run":"${{ github.run_id }}"}' | gsutil cp - "$PREFIX/status.json"
+
+      - name: Build custom image
+        id: build
+        env:
+          NIX_CACHE_BUCKET: ${{ vars.NIX_CACHE_BUCKET }}
+          NIX_CACHE_SECRET_KEY: ${{ secrets.NIX_CACHE_SECRET_KEY }}
+          # Self-managed signing key (minisign, no third-party authority). If
+          # the secret is unset the build still produces unsigned provenance.
+          SOURCEOS_SIGN_SECRET_KEY: ${{ secrets.SOURCEOS_SIGN_SECRET_KEY }}
+          SOURCEOS_SIGN_PUBKEY: ${{ vars.SOURCEOS_SIGN_PUBKEY }}
+        run: |
+          PREFIX="gs://${GCS_BUCKET}/user-builds/${{ github.event.inputs.uid }}/${{ github.event.inputs.build_id }}"
+          printf '%s' '${{ github.event.inputs.spec }}' > /tmp/spec.json
+          SPEC_FILE=/tmp/spec.json OUT=out GCS_PREFIX="$PREFIX" \
+            TARGET="${{ github.event.inputs.target || 'iso' }}" \
+            BUILD_ID="${{ github.event.inputs.build_id }}" BUILD_UID="${{ github.event.inputs.uid }}" \
+            VERSION="${{ vars.SOURCEOS_VERSION || '26.11' }}" SOURCE_REV="${GITHUB_SHA}" \
+            bash scripts/build-custom-image.sh
+          echo "artifact=$(cat out/artifact-url.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Mark done
+        if: success()
+        run: |
+          PREFIX="gs://${GCS_BUCKET}/user-builds/${{ github.event.inputs.uid }}/${{ github.event.inputs.build_id }}"
+          printf '{"status":"complete","artifact":"%s"}' "${{ steps.build.outputs.artifact }}" \
+            | gsutil cp - "$PREFIX/status.json"
+
+      - name: Mark failed
+        if: failure()
+        run: |
+          PREFIX="gs://${GCS_BUCKET}/user-builds/${{ github.event.inputs.uid }}/${{ github.event.inputs.build_id }}"
+          echo '{"status":"error"}' | gsutil cp - "$PREFIX/status.json" || true

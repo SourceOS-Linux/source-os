@@ -6,7 +6,7 @@
 
 ## Purpose
 
-This document establishes `SociOS-Linux/source-os` as the **temporary umbrella landing zone** for the SourceOS runtime and enforcement spine **until a dedicated runtime repository exists** under `SourceOS-Linux`.
+This document establishes `SourceOS-Linux/source-os` as the **temporary umbrella landing zone** for the SourceOS runtime and enforcement spine **until a dedicated runtime repository exists** under `SourceOS-Linux`.
 
 This repository is not the canonical contract home. Contract objects belong in `SourceOS-Linux/sourceos-spec`. This repository is the temporary implementation home for runtime-oriented components that need to exist now.
 
@@ -18,7 +18,7 @@ The current ecosystem contains:
 - multiple distro / installer / packaging repositories in `SociOS-Linux`
 - but **no dedicated runtime / security control-plane repository** for Triune and Exodus enforcement
 
-Until that runtime repo is created, `SociOS-Linux/source-os` is the least-wrong landing zone because it identifies itself as the main SociOS Linux SourceOS repository.
+Until that runtime repo is created, `SourceOS-Linux/source-os` is the least-wrong landing zone because it identifies itself as the main SociOS Linux SourceOS repository.
 
 ## What belongs here now
 
@@ -123,7 +123,7 @@ The intended end state is:
 
 - **contracts** remain in `SourceOS-Linux/sourceos-spec`
 - **runtime implementation** moves into a dedicated `SourceOS-Linux` runtime repository
-- `SociOS-Linux/source-os` then either becomes a thin umbrella / integration repo or retains only SociOS-specific orchestration glue
+- `SourceOS-Linux/source-os` then either becomes a thin umbrella / integration repo or retains only SociOS-specific orchestration glue
 
 ## Immediate follow-on work
 

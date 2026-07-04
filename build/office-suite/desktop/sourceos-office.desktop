@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=SourceOS Office
+Comment=Open office documents using the SourceOS office shell
+Exec=sh -lc '"$HOME/.local/bin/sourceos-office-open" "%f"'
+Terminal=false
+MimeType=application/vnd.oasis.opendocument.text;application/vnd.oasis.opendocument.spreadsheet;application/vnd.oasis.opendocument.presentation;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.openxmlformats-officedocument.presentationml.presentation;application/msword;application/vnd.ms-excel;application/vnd.ms-powerpoint;
+Categories=Office;
+NoDisplay=false

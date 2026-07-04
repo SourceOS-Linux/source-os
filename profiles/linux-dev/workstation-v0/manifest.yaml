@@ -1,0 +1,108 @@
+apiVersion: sourceos.workstation/v0
+kind: WorkstationProfile
+metadata:
+  name: workstation-v0
+  channel: linux-dev
+spec:
+  layers:
+    system:
+      rpm_ostree:
+        - git
+        - openssh-clients
+        - podman
+        - toolbox
+        - wl-clipboard
+        - jq
+        - xclip
+        - fuzzel
+        - input-remapper
+        - sushi
+        - gnome-screenshot
+      dnf:
+        - git
+        - openssh-clients
+        - podman
+        - toolbox
+        - wl-clipboard
+        - jq
+        - xclip
+        - fuzzel
+        - input-remapper
+        - sushi
+        - gnome-screenshot
+    user:
+      brew:
+        - fzf
+        - atuin
+        - bat
+        - zoxide
+        - yazi
+        - eza
+        - gum
+        - direnv
+        - tldr
+        - fd
+        - ripgrep
+        - sd
+        - lazygit
+        - gh
+        - diff-so-fancy
+        - tig
+        - svu
+        - tmux
+        - sesh
+        - mprocs
+        - procs
+        - lazydocker
+        - k9s
+        - btop
+        - jnv
+        - gojq
+        - fx
+        - jless
+        - jqp
+        - dua-cli
+        - dust
+        - kondo
+        - glow
+        - hyperfine
+        - pipx
+        - rclone
+        - minio-mc
+        - rsync
+        - entr
+        - curlie
+  desktop:
+    gnome:
+      inputs:
+        primary_backend:
+          name: input-remapper
+          rationale: "Packaged on Fedora and works across X11/Wayland at evdev layer"
+        compatibility_backends:
+          - name: xremap
+            rationale: "MIT, app-specific remapping, GNOME Wayland compatible"
+          - name: kinto
+            rationale: "X11/xkeysnail compatibility lane for mac-style shortcuts"
+        gestures:
+          name: fusuma
+          enabled: true
+          rationale: "MIT multitouch gesture recognizer using libinput"
+      mac_polish:
+        quicklook: sushi
+        screenshots: gnome-screenshot
+        screenshot_dir: "~/Pictures/Screenshots"
+  launcher:
+    palette:
+      primary: fuzzel
+      fallbacks:
+        - wofi
+        - rofi
+      trigger: "<Super>space"
+      command: "sourceos palette"
+    search:
+      file_backend: lampstand
+      invariant: no_redundant_file_search
+      authority: sourceos-search
+      notes:
+        - "Lampstand is the Linux-native file search backend."
+        - "The launcher remains an action bus and must not perform a second file-search pass."

@@ -1,0 +1,10 @@
+[Unit]
+Description=Schedule Liberty Stack verification
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=liberty-stack-verify.service
+
+[Install]
+WantedBy=timers.target

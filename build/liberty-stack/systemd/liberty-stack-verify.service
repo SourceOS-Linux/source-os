@@ -1,0 +1,11 @@
+[Unit]
+Description=Liberty Stack verification runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/source-os/liberty-stack/liberty_stack_verify.sh
+
+[Install]
+WantedBy=multi-user.target

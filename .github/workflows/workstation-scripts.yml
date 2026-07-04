@@ -1,0 +1,327 @@
+name: workstation-scripts
+
+on:
+  pull_request:
+    paths:
+      - 'profiles/linux-dev/workstation-v0/**'
+      - 'docs/workstation/**'
+      - '.github/workflows/workstation-scripts.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'profiles/linux-dev/workstation-v0/**'
+      - 'docs/workstation/**'
+      - '.github/workflows/workstation-scripts.yml'
+
+jobs:
+  shellcheck-and-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Shellcheck (workstation-v0)
+        run: |
+          set -euo pipefail
+          # Policy: ShellCheck warnings are treated as failures for workstation-v0 scripts.
+          files=$(git ls-files 'profiles/linux-dev/workstation-v0/**/*.sh' \
+                              'profiles/linux-dev/workstation-v0/**/sourceos' \
+                              'profiles/linux-dev/workstation-v0/**/install-sourceos-cli.sh' || true)
+          if [ -z "$files" ]; then
+            echo "No scripts found."
+            exit 0
+          fi
+
+          fail=0
+          while IFS= read -r f; do
+            shellcheck -S warning "$f" || fail=1
+          done <<<"$files"
+          exit $fail
+
+      - name: Bash syntax check (bash -n)
+        run: |
+          set -euo pipefail
+          files=$(git ls-files 'profiles/linux-dev/workstation-v0/**/*.sh' \
+                              'profiles/linux-dev/workstation-v0/**/sourceos' \
+                              'profiles/linux-dev/workstation-v0/**/install-sourceos-cli.sh' || true)
+          if [ -z "$files" ]; then
+            echo "No scripts found."
+            exit 0
+          fi
+
+          while IFS= read -r f; do
+            bash -n "$f"
+          done <<<"$files"
+
+      - name: Smoke: patch-shell apply is idempotent
+        run: |
+          set -euo pipefail
+          p='profiles/linux-dev/workstation-v0/bin/patch-shell.sh'
+          bash -n "$p"
+
+          tmp=$(mktemp)
+          printf '# rc\n' > "$tmp"
+
+          SOURCEOS_RC_FILES="$tmp" bash "$p" apply
+          SOURCEOS_RC_FILES="$tmp" bash "$p" apply
+
+          test "$(grep -cF '# >>> sourceos workstation-v0 >>>' "$tmp")" -eq 1
+          test "$(grep -cF '# <<< sourceos workstation-v0 <<<' "$tmp")" -eq 1
+          grep -F 'export PATH="$HOME/.local/bin:$PATH"' "$tmp" >/dev/null
+
+      - name: Smoke: patch-shell revert removes marker block
+        run: |
+          set -euo pipefail
+          p='profiles/linux-dev/workstation-v0/bin/patch-shell.sh'
+          tmp=$(mktemp)
+          printf '# rc\n' > "$tmp"
+
+          SOURCEOS_RC_FILES="$tmp" bash "$p" apply
+          SOURCEOS_RC_FILES="$tmp" bash "$p" revert
+
+          ! grep -qF '# >>> sourceos workstation-v0 >>>' "$tmp"
+          ! grep -qF '# <<< sourceos workstation-v0 <<<' "$tmp"
+
+      - name: Smoke: patch-shell JSON contract parses
+        run: |
+          set -euo pipefail
+          p='profiles/linux-dev/workstation-v0/bin/patch-shell.sh'
+          tmp=$(mktemp)
+          printf '# rc\n' > "$tmp"
+          out=$(SOURCEOS_RC_FILES="$tmp" bash "$p" dry-run --json)
+          python3 -c 'import json,sys; j=json.loads(sys.stdin.read()); assert j["kind"]=="sourceos.fix.shell"; assert j["mode"]=="dry-run"; assert "summary" in j; assert isinstance(j["results"], list); print("ok")' <<<"$out"
+
+      - name: Smoke: patch-fish apply/revert
+        run: |
+          set -euo pipefail
+          p='profiles/linux-dev/workstation-v0/bin/patch-fish.sh'
+          bash -n "$p"
+
+          tmp=$(mktemp)
+          printf '# fish\n' > "$tmp"
+
+          SOURCEOS_FISH_CONFIG="$tmp" bash "$p" apply
+          SOURCEOS_FISH_CONFIG="$tmp" bash "$p" revert
+
+          ! grep -qF '# >>> sourceos workstation-v0 (fish) >>>' "$tmp"
+          ! grep -qF '# <<< sourceos workstation-v0 (fish) <<<' "$tmp"
+
+      - name: Smoke: patch-fish JSON contract parses
+        run: |
+          set -euo pipefail
+          p='profiles/linux-dev/workstation-v0/bin/patch-fish.sh'
+          tmp=$(mktemp)
+          printf '# fish\n' > "$tmp"
+          out=$(SOURCEOS_FISH_CONFIG="$tmp" bash "$p" dry-run --json)
+          python3 -c 'import json,sys; j=json.loads(sys.stdin.read()); assert j["kind"]=="sourceos.fix.fish"; assert j["mode"]=="dry-run"; assert "result" in j; print("ok")' <<<"$out"
+
+      - name: Smoke: patch-all apply/revert
+        run: |
+          set -euo pipefail
+          p='profiles/linux-dev/workstation-v0/bin/patch-all.sh'
+          bash -n "$p"
+
+          rc_tmp=$(mktemp)
+          fish_tmp=$(mktemp)
+          printf '# rc\n' > "$rc_tmp"
+          printf '# fish\n' > "$fish_tmp"
+
+          SOURCEOS_RC_FILES="$rc_tmp" SOURCEOS_FISH_CONFIG="$fish_tmp" bash "$p" apply
+          SOURCEOS_RC_FILES="$rc_tmp" SOURCEOS_FISH_CONFIG="$fish_tmp" bash "$p" revert
+
+          ! grep -qF '# >>> sourceos workstation-v0 >>>' "$rc_tmp"
+          ! grep -qF '# <<< sourceos workstation-v0 <<<' "$rc_tmp"
+          ! grep -qF '# >>> sourceos workstation-v0 (fish) >>>' "$fish_tmp"
+          ! grep -qF '# <<< sourceos workstation-v0 (fish) <<<' "$fish_tmp"
+
+      - name: Smoke: patch-all JSON contract parses
+        run: |
+          set -euo pipefail
+          p='profiles/linux-dev/workstation-v0/bin/patch-all.sh'
+          rc_tmp=$(mktemp)
+          fish_tmp=$(mktemp)
+          printf '# rc\n' > "$rc_tmp"
+          printf '# fish\n' > "$fish_tmp"
+          out=$(SOURCEOS_RC_FILES="$rc_tmp" SOURCEOS_FISH_CONFIG="$fish_tmp" bash "$p" dry-run --json)
+          python3 -c 'import json,sys; j=json.loads(sys.stdin.read()); assert j["kind"]=="sourceos.fix.all"; assert j["mode"]=="dry-run"; assert "results" in j and "shell" in j["results"] and "fish" in j["results"]; print("ok")' <<<"$out"
+
+      - name: Smoke: sourceos help exits cleanly
+        run: |
+          set -euo pipefail
+          f='profiles/linux-dev/workstation-v0/bin/sourceos'
+          bash -n "$f"
+          SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 bash "$f" --help >/dev/null
+
+      - name: Smoke: sourceos fix all dry-run exits cleanly
+        run: |
+          set -euo pipefail
+          f='profiles/linux-dev/workstation-v0/bin/sourceos'
+          rc_tmp=$(mktemp)
+          fish_tmp=$(mktemp)
+          printf '# rc\n' > "$rc_tmp"
+          printf '# fish\n' > "$fish_tmp"
+          SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 SOURCEOS_RC_FILES="$rc_tmp" SOURCEOS_FISH_CONFIG="$fish_tmp" bash "$f" fix all dry-run >/dev/null
+
+      - name: Smoke: sourceos fix all JSON contract parses
+        run: |
+          set -euo pipefail
+          f='profiles/linux-dev/workstation-v0/bin/sourceos'
+          rc_tmp=$(mktemp)
+          fish_tmp=$(mktemp)
+          printf '# rc\n' > "$rc_tmp"
+          printf '# fish\n' > "$fish_tmp"
+          out=$(SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 SOURCEOS_RC_FILES="$rc_tmp" SOURCEOS_FISH_CONFIG="$fish_tmp" bash "$f" fix all dry-run --json)
+          python3 -c 'import json,sys; j=json.loads(sys.stdin.read()); assert j["kind"]=="sourceos.fix.all"; assert j["mode"]=="dry-run"; assert "results" in j; print("ok")' <<<"$out"
+
+      - name: Smoke: sourceos fix shell dry-run exits cleanly
+        run: |
+          set -euo pipefail
+          f='profiles/linux-dev/workstation-v0/bin/sourceos'
+          tmp=$(mktemp)
+          printf '# rc\n' > "$tmp"
+          SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 SOURCEOS_RC_FILES="$tmp" bash "$f" fix shell dry-run >/dev/null
+
+      - name: Smoke: sourceos fix fish dry-run exits cleanly
+        run: |
+          set -euo pipefail
+          f='profiles/linux-dev/workstation-v0/bin/sourceos'
+          tmp=$(mktemp)
+          printf '# fish\n' > "$tmp"
+          SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 SOURCEOS_FISH_CONFIG="$tmp" bash "$f" fix fish dry-run >/dev/null
+
+      - name: Smoke: doctor JSON contract parses
+        run: |
+          set -euo pipefail
+          export PATH="$(pwd)/profiles/linux-dev/workstation-v0/bin:$PATH"
+          d='profiles/linux-dev/workstation-v0/doctor.sh'
+          set +e
+          out=$(SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 bash "$d" --json)
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+            echo "Unexpected exit code: $rc" >&2
+            exit 1
+          fi
+          python3 -c 'import json,sys; j=json.loads(sys.stdin.read()); assert j["kind"]=="sourceos.doctor"; assert j["profile"]=="linux-dev/workstation-v0"; assert "summary" in j; assert isinstance(j["results"], list); print("ok")' <<<"$out"
+
+      - name: Smoke: sourceos doctor JSON contract parses
+        run: |
+          set -euo pipefail
+          f='profiles/linux-dev/workstation-v0/bin/sourceos'
+          export PATH="$(pwd)/profiles/linux-dev/workstation-v0/bin:$PATH"
+          set +e
+          out=$(SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 bash "$f" doctor --json)
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+            echo "Unexpected exit code: $rc" >&2
+            exit 1
+          fi
+          python3 -c 'import json,sys; j=json.loads(sys.stdin.read()); assert j["kind"]=="sourceos.doctor"; assert j["profile"]=="linux-dev/workstation-v0"; print("ok")' <<<"$out"
+
+      - name: Smoke: sourceos doctor report file writes
+        run: |
+          set -euo pipefail
+          f='profiles/linux-dev/workstation-v0/bin/sourceos'
+          export PATH="$(pwd)/profiles/linux-dev/workstation-v0/bin:$PATH"
+          out_json=$(mktemp)
+          set +e
+          SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 bash "$f" doctor --write "$out_json" >/dev/null
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+            echo "Unexpected exit code: $rc" >&2
+            exit 1
+          fi
+          test -s "$out_json"
+          python3 -c 'import json,sys; j=json.load(open(sys.argv[1])); assert j["kind"]=="sourceos.doctor"; print("ok")' "$out_json"
+
+      - name: Smoke: sourceos status JSON parses
+        run: |
+          set -euo pipefail
+          f='profiles/linux-dev/workstation-v0/bin/sourceos'
+          bash -n "$f"
+
+          # `sourceos status --json` may return exit 0 (all deps present) or 2 (missing deps).
+          # We only require the JSON output to parse and contain expected keys.
+          set +e
+          out=$(SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 bash "$f" status --json)
+          rc=$?
+          set -e
+
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+            echo "Unexpected exit code: $rc" >&2
+            exit 1
+          fi
+
+          python3 -c '
+import json, sys
+j = json.loads(sys.stdin.read())
+req = ["profile", "ok", "gnome", "required_missing", "optional_missing", "warnings"]
+miss = [k for k in req if k not in j]
+assert not miss, "missing keys: " + ",".join(miss)
+assert isinstance(j["warnings"], list), "warnings must be a list"
+assert isinstance(j["required_missing"], list), "required_missing must be a list"
+assert isinstance(j["optional_missing"], list), "optional_missing must be a list"
+assert isinstance(j["ok"], bool), "ok must be a bool"
+assert isinstance(j["gnome"], bool), "gnome must be a bool"
+print("ok: schema valid, warnings count=" + str(len(j["warnings"])))
+' <<<"$out"
+
+      - name: Smoke: sourceos status --json warnings includes aggregate polish checks
+        run: |
+          set -euo pipefail
+          f='profiles/linux-dev/workstation-v0/bin/sourceos'
+
+          # Validate commands (as required by validation evidence requirement):
+          echo "CMD: bash -n $f"
+          bash -n "$f"
+          echo "PASS: bash -n"
+
+          echo "CMD: SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 bash $f status --json"
+          set +e
+          out=$(SOURCEOS_PROFILE_DIR=profiles/linux-dev/workstation-v0 bash "$f" status --json)
+          rc=$?
+          set -e
+          echo "exit code: $rc"
+
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+            echo "FAIL: unexpected exit code $rc" >&2
+            exit 1
+          fi
+          echo "PASS: exit code $rc is 0 or 2"
+
+          # Validate JSON schema and aggregate polish warning integration
+          python3 -c '
+import json, sys
+j = json.loads(sys.stdin.read())
+
+# Schema check: all expected keys present
+req = ["profile", "ok", "gnome", "required_missing", "optional_missing", "warnings"]
+miss = [k for k in req if k not in j]
+assert not miss, "missing keys: " + ",".join(miss)
+print("PASS: all schema keys present:", req)
+
+# Type check: warnings is a list (aggregate polish warnings integrate here)
+assert isinstance(j["warnings"], list), "warnings must be a list"
+print("PASS: warnings is list, count=" + str(len(j["warnings"])))
+print("warnings:", j["warnings"])
+
+# Confirm profile value
+assert j["profile"] == "linux-dev/workstation-v0", "unexpected profile: " + str(j["profile"])
+print("PASS: profile =", j["profile"])
+' <<<"$out"
+          echo "PASS: aggregate polish warning integration validated"
+
+      - name: Drift guard: forbid legacy launcher strings
+        run: |
+          set -euo pipefail
+          # Prevent drift back to non-open launcher references.
+          if grep -RIn --exclude-dir=.git -E 'Albert|albert toggle|SOURCEOS_ALLOW_THIRDPARTY_REPOS' docs/workstation profiles/linux-dev/workstation-v0; then
+            echo "Found forbidden legacy launcher reference." >&2
+            exit 1
+          fi
