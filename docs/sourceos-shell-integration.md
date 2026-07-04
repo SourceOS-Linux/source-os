@@ -11,6 +11,7 @@ This repository, `source-os`, carries the Linux realization surfaces required to
 - Nix/NixOS modules
 - profile wiring
 - machine-level integration hooks
+- derive-service runtime integration such as `docd`
 
 ## What does not belong here
 
