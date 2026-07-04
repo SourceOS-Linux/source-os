@@ -299,6 +299,8 @@
           mesh-package-contract = import ./tests/mesh-package-contract.nix { inherit pkgs; };
           mesh-host-runtime-contract = import ./tests/mesh-host-runtime-contract.nix { inherit pkgs; };
           sourceos-shell-module-contract = import ./tests/sourceos-shell-module-contract.nix { inherit pkgs; };
+          sourceos-shell-service-graph-contract = import ./tests/sourceos-shell-service-graph-contract.nix { inherit pkgs; };
+          sourceos-shell-keyboard-equivalence-contract = import ./tests/sourceos-shell-keyboard-equivalence-contract.nix { inherit pkgs; };
  
           sourceos-shell-pdf-stack-contract = import ./tests/sourceos-shell-pdf-stack-contract.nix { inherit pkgs; };
           sourceos-shell-pdf-config-contract = import ./tests/sourceos-shell-pdf-config-contract.nix { inherit pkgs; };
