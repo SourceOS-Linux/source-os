@@ -96,6 +96,32 @@ The workstation keeps keyboard remapping explicit and policy-gated:
 - Kinto remains an explicit compatibility lane for X11/xkeysnail-style workflows and is not auto-installed in the Wayland-first profile.
 - `check-keyboard-policy.sh` emits key=value status for CI and future doctor/status integration.
 
+## Mac-defaults validation
+
+The mac-like GNOME defaults pack can be inspected without changing system state:
+
+```bash
+./profiles/linux-dev/workstation-v0/bin/check-mac-defaults.sh
+```
+
+The helper emits key=value output for:
+
+- `mac_defaults_script`
+- `hot_corners_disabled`
+- `clock_format_12h`
+- `locate_pointer_enabled`
+- `nautilus_double_click`
+- `dock_favorites_seed`
+- `files_binding_super_e`
+- `terminal_binding_super_ret`
+- `screenshot_binding_3`, `screenshot_binding_4`, `screenshot_binding_5`, `screenshot_binding_6`
+- `mac_defaults_ok`
+
+It is read-only and does not require a GNOME session. It verifies that
+`mac-defaults.sh` records the intended desktop behavior slice by inspecting
+the script source. The check is wired into the
+`workstation-mac-defaults-validation` CI workflow.
+
 ## Dock/extension validation
 
 The dock and extension lane can be inspected without changing system state:
