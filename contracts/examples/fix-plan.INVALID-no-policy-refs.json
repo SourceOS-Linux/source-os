@@ -1,0 +1,15 @@
+{
+  "_invalid": "applied_fix without policy_decision_refs — forbidden",
+  "id": "urn:srcos:workstation-action-boundary:bad-fix-no-policy-20260718",
+  "specVersion": "0.1.0",
+  "artifact_kind": "applied_fix",
+  "requested_action": "fix shell",
+  "mutation_planned": true,
+  "mutation_performed": true,
+  "performed_by": "some-agent",
+  "before_refs": ["urn:srcos:evidence:before"],
+  "after_refs": ["urn:srcos:evidence:after"],
+  "policy_decision_refs": [],
+  "evidence_refs": [],
+  "sensitive_data_excluded": true
+}

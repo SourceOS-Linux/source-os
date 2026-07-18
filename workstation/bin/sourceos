@@ -15,6 +15,8 @@ Usage:
   sourceos profile list
   sourceos profile apply <profile>
   sourceos doctor [<profile>]
+  sourceos index status [--json]
+  sourceos index explain --file <path>
 
 Notes:
   - This CLI is the implementation surface. Design/RFCs live in SociOS-Linux/enhancements.
@@ -50,6 +52,50 @@ doctor() {
   exec "$doc"
 }
 
+index_status() {
+  local json_mode=0
+  [[ "${1:-}" == "--json" ]] && json_mode=1
+
+  local queue_depth=0
+  local generation="stub-v0"
+  local failed_extractors=0
+  local paused_lanes=0
+  local policy_denied_count=0
+  local status="stub"
+  local note="sourceos-indexd is not yet running. This is the stub surface (issue #162)."
+
+  if [[ "$json_mode" -eq 1 ]]; then
+    printf '{"status":"%s","generation":"%s","queue_depth":%d,"failed_extractors":%d,"paused_lanes":%d,"policy_denied_count":%d,"note":"%s"}\n' \
+      "$status" "$generation" "$queue_depth" "$failed_extractors" "$paused_lanes" "$policy_denied_count" "$note"
+  else
+    printf "SourceOS Index Status\n"
+    printf "  status:              %s\n" "$status"
+    printf "  generation:          %s\n" "$generation"
+    printf "  queue_depth:         %d\n" "$queue_depth"
+    printf "  failed_extractors:   %d\n" "$failed_extractors"
+    printf "  paused_lanes:        %d\n" "$paused_lanes"
+    printf "  policy_denied_count: %d\n" "$policy_denied_count"
+    printf "  note:                %s\n" "$note"
+  fi
+}
+
+index_explain() {
+  local file=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --file) shift; file="${1:-}"; shift ;;
+      *) err "unknown option: $1"; exit 2 ;;
+    esac
+  done
+  [[ -n "$file" ]] || { err "--file <path> required"; exit 2; }
+
+  local abs_path
+  abs_path="$(realpath "$file" 2>/dev/null || echo "$file")"
+
+  printf '{"file":"%s","last_observed_event":"never","path_policy":"unknown","extractor_identity":"stub","receipt_status":"absent","generation_membership":"none","semantic_indexing_enabled":false,"cloud_exposure_enabled":false,"note":"sourceos-indexd stub (issue #162). Full explain requires indexd daemon."}\n' \
+    "$abs_path"
+}
+
 main() {
   local cmd=${1:-}
   case "$cmd" in
@@ -77,6 +123,25 @@ main() {
     doctor)
       shift
       doctor "${1:-workstation-v0}"
+      ;;
+    index)
+      shift
+      local sub=${1:-}
+      case "$sub" in
+        status)
+          shift
+          index_status "${@}"
+          ;;
+        explain)
+          shift
+          index_explain "${@}"
+          ;;
+        *)
+          err "unknown index subcommand: $sub"
+          usage
+          exit 2
+          ;;
+      esac
       ;;
     *)
       err "unknown command: $cmd"

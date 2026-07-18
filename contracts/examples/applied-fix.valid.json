@@ -1,0 +1,17 @@
+{
+  "id": "urn:srcos:workstation-action-boundary:applied-fix-shell-20260718",
+  "specVersion": "0.1.0",
+  "artifact_kind": "applied_fix",
+  "requested_action": "fix shell",
+  "mutation_planned": true,
+  "mutation_performed": true,
+  "performed_by": "sourceos-cli/mdheller",
+  "policy_decision_refs": ["urn:srcos:policy-decision:fix-shell-admission-20260718"],
+  "before_refs": ["urn:srcos:evidence:shell-config-before-20260718"],
+  "after_refs": ["urn:srcos:evidence:shell-config-after-20260718"],
+  "evidence_refs": ["urn:srcos:evidence:doctor-report-20260718"],
+  "reversible": true,
+  "rollback_refs": ["urn:srcos:rollback:fix-shell-rollback-20260718"],
+  "sensitive_data_excluded": true,
+  "downstream_consumers": ["agentplane", "sociosphere", "prophet-cli"]
+}
