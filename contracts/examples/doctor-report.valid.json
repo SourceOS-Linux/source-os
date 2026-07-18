@@ -1,0 +1,11 @@
+{
+  "id": "urn:srcos:workstation-action-boundary:doctor-report-workstation-v0-20260718",
+  "specVersion": "0.1.0",
+  "artifact_kind": "doctor_report",
+  "requested_action": "doctor workstation-v0",
+  "mutation_planned": false,
+  "mutation_performed": false,
+  "evidence_refs": ["urn:srcos:evidence:doctor-sh-output-20260718"],
+  "sensitive_data_excluded": true,
+  "downstream_consumers": ["agentplane", "sociosphere"]
+}
