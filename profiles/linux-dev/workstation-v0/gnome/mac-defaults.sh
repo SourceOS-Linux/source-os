@@ -66,7 +66,7 @@ main(){
   mkdir -p "$HOME/Pictures/Screenshots"
 
   # Favorites / dock seed (best-effort)
-  set_key org.gnome.shell favorite-apps "['org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop', 'firefox.desktop', 'org.gnome.Settings.desktop']"
+  set_key org.gnome.shell favorite-apps "['org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop', 'bearbrowser.desktop', 'org.gnome.Settings.desktop']"
 
   # Preserve palette hotkey in custom0, then add Finder/Terminal/screenshot bindings.
   local base="/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/"

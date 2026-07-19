@@ -1,0 +1,72 @@
+name: workstation-gnome-dock-validation
+
+on:
+  pull_request:
+    paths:
+      - 'profiles/linux-dev/workstation-v0/bin/check-gnome-dock-extension.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/README.md'
+      - '.github/workflows/workstation-gnome-dock-validation.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'profiles/linux-dev/workstation-v0/bin/check-gnome-dock-extension.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/README.md'
+      - '.github/workflows/workstation-gnome-dock-validation.yml'
+
+jobs:
+  dock-extension-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check dock extension helper
+        run: |
+          set -euo pipefail
+          bash -n profiles/linux-dev/workstation-v0/bin/check-gnome-dock-extension.sh
+
+      - name: Smoke: helper emits required keys without GNOME tools
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/check-gnome-dock-extension.sh'
+          out=$(bash "$helper")
+          grep -F 'gnome_extensions=' <<<"$out" >/dev/null
+          grep -F 'gsettings=' <<<"$out" >/dev/null
+          grep -F 'dash_to_dock=' <<<"$out" >/dev/null
+          grep -F 'appindicator=' <<<"$out" >/dev/null
+          grep -F 'favorite_apps_visibility=' <<<"$out" >/dev/null
+          grep -F 'gnome_dock_extension_lane_ok=' <<<"$out" >/dev/null
+
+      - name: Smoke: helper detects positive extension and favorites state
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/check-gnome-dock-extension.sh'
+          stub_bin=$(mktemp -d)
+          cat > "$stub_bin/gnome-extensions" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [ "${1:-}" = list ]; then
+            printf 'dash-to-dock@micxgx.gmail.com\n'
+            printf 'appindicatorsupport@rgcjonas.gmail.com\n'
+            exit 0
+          fi
+          exit 2
+          EOF
+          cat > "$stub_bin/gsettings" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [ "${1:-}" = get ] && [ "${2:-}" = org.gnome.shell ] && [ "${3:-}" = favorite-apps ]; then
+            printf "['org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop']\n"
+            exit 0
+          fi
+          exit 2
+          EOF
+          chmod +x "$stub_bin/gnome-extensions" "$stub_bin/gsettings"
+          out=$(PATH="$stub_bin:$PATH" bash "$helper")
+          grep -F 'gnome_extensions=present' <<<"$out" >/dev/null
+          grep -F 'gsettings=present' <<<"$out" >/dev/null
+          grep -F 'dash_to_dock=present' <<<"$out" >/dev/null
+          grep -F 'appindicator=present' <<<"$out" >/dev/null
+          grep -F 'favorite_apps_visibility=present' <<<"$out" >/dev/null
+          grep -F 'gnome_dock_extension_lane_ok=yes' <<<"$out" >/dev/null

@@ -1,0 +1,150 @@
+# Image tests — validate that SourceOS editions actually boot.
+#   Layer 1 (always): deterministic nixosTests in QEMU/KVM on GitHub runners.
+#   Layer 2 (opt-in):  Agent-S GUI test — needs a grounding endpoint + key, so
+#                      it's gated and expects those to be provided.
+name: image-tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_agent_s:
+        description: 'Also run the Agent-S GUI test (needs AS_GROUND_URL + ANTHROPIC_API_KEY)'
+        required: false
+        default: false
+        type: boolean
+      run_arm_boot:
+        description: 'Also run aarch64 boot tests (needs a KVM-capable self-hosted ARM runner)'
+        required: false
+        default: false
+        type: boolean
+      run_install:
+        description: 'Also run the install-to-disk test (real installer partitions + installs + boots from disk)'
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - 'profiles/**'
+      - 'flake.nix'
+      - 'tests/editions/**'
+      - '.github/workflows/image-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'profiles/**'
+      - 'tests/editions/**'
+
+jobs:
+  # ── Layer 1: deterministic boot tests (free, KVM on GitHub) ──────────────────
+  # x86_64 only: nixosTests require the `kvm` feature, and GitHub's free
+  # ubuntu-24.04-arm runners do NOT expose /dev/kvm. aarch64 boot tests run on a
+  # KVM-capable ARM host (GCP arm VM / self-hosted arm runner) — see boot-tests-arm.
+  boot-tests:
+    name: boot ${{ matrix.check }} (x86_64)
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [edition-desktop-boot, edition-server-boot, edition-edge-boot]
+    runs-on: ubuntu-latest
+    env: { arch: x86_64 }
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
+          ls -l /dev/kvm || echo "no /dev/kvm (test will use slower TCG)"
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true; df -h
+      - name: Run boot test
+        run: |
+          nix build ".#checks.x86_64-linux.${{ matrix.check }}" \
+            --print-build-logs --show-trace -L
+
+  # ── Install-to-disk test (opt-in) ────────────────────────────────────────────
+  # Heavy: the real installer partitions a blank disk, installs the server
+  # edition, then the disk is rebooted and asserted to come up on its own
+  # bootloader. Opt-in via run_install so it never gates ordinary PRs.
+  install-test:
+    name: install-to-disk (x86_64)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_install == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
+          ls -l /dev/kvm || echo "no /dev/kvm (test will use slower TCG)"
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true; df -h
+      - name: Run install-to-disk test
+        run: |
+          nix build ".#checks.x86_64-linux.edition-server-install" \
+            --print-build-logs --show-trace -L
+
+  # ── aarch64 boot tests — need KVM on ARM (your GCP arm VM / self-hosted runner) ──
+  # Opt-in: GitHub's free ARM runners have no /dev/kvm, so these run on a
+  # KVM-capable self-hosted aarch64 runner when you enable run_arm_boot.
+  boot-tests-arm:
+    name: boot ${{ matrix.check }} (aarch64)
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_arm_boot == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        check: [edition-server-boot, edition-edge-boot]
+    runs-on: [self-hosted, aarch64-linux, Linux]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run boot test
+        run: |
+          . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh || true
+          nix build ".#checks.aarch64-linux.${{ matrix.check }}" \
+            --print-build-logs --show-trace -L
+
+  # ── Layer 2: Agent-S GUI test (opt-in, needs grounding endpoint + key) ───────
+  agent-s:
+    name: Agent-S GUI test
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.run_agent_s == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
+      - name: Build desktop image + harness deps
+        run: |
+          nix build .#packages.x86_64-linux.sourceos-image-qcow2-desktop --print-build-logs
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb x11vnc tigervnc-viewer qemu-system-x86 python3-pip
+          pip install -r tests/agent-s/requirements.txt
+      - name: Run Agent-S GUI test
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          AS_GROUND_URL: ${{ secrets.AS_GROUND_URL }}   # external UI-TARS endpoint
+        run: |
+          IMG=$(find -L result -name '*.qcow2' | head -1) \
+            bash tests/agent-s/harness.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: agent-s-artifacts, path: tests/agent-s/artifacts/*, if-no-files-found: ignore }

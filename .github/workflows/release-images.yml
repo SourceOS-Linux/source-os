@@ -1,0 +1,221 @@
+# Public release images — builds installable ISOs + the Apple Silicon boot
+# bundle and publishes them to a GitHub Release (public, versioned URLs) and to
+# a public prefix of the GCS artifacts bucket. Separate from nix-build-images.yml
+# (which feeds the internal Katello content lifecycle).
+#
+# Trigger: push a tag like `v26.11` or `v26.11.1`, or run manually.
+#
+# Required secrets (same WIF setup as nix-build-images.yml):
+#   GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT
+# GITHUB_TOKEN (built-in) needs contents:write for the Release.
+name: release-images
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to build (e.g. v26.11 or v26.11.0-rc1)'
+        required: true
+        type: string
+      build_asahi:
+        description: 'Also build the Apple Silicon boot bundle + OS package (still maturing; needs hw validation)'
+        required: false
+        default: false
+        type: boolean
+      mirror_gcs:
+        description: 'Mirror assets to the GCS bucket (your infra). GitHub Release always happens regardless.'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  GCS_BUCKET: sourceos-artifacts-socioprophet
+  GCP_PROJECT: socioprophet-platform
+
+jobs:
+
+  # ── x86_64 installer ISO ─────────────────────────────────────────────────────
+  iso-x86_64:
+    name: build x86_64 ISO
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android; df -h
+      - name: Build ISO
+        run: |
+          nix build .#packages.x86_64-linux.sourceos-installer-iso \
+            --print-build-logs --show-trace
+          ISO=$(find -L result -name '*.iso' | head -1)
+          # Deterministic, stable asset name (nix names the file nixos-*.iso).
+          NAME="sourceos-installer-x86_64.iso"
+          mkdir -p out && cp "$ISO" "out/$NAME"
+          ( cd out && sha256sum "$NAME" > "$NAME.sha256" )
+          ls -lh out
+      - uses: actions/upload-artifact@v4
+        with: { name: iso-x86_64, path: out/*, retention-days: 7 }
+
+  # ── aarch64 (generic ARM64 UEFI) installer ISO ───────────────────────────────
+  # Native build on GitHub's free arm64 runner (public repo) — no QEMU, no
+  # self-hosted/your infra. Builds every release alongside x86_64.
+  iso-aarch64:
+    name: build aarch64 ISO
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    permissions: { contents: read, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true; df -h
+      - name: Build ISO
+        run: |
+          nix build .#packages.aarch64-linux.sourceos-installer-iso \
+            --print-build-logs --show-trace
+          ISO=$(find -L result -name '*.iso' | head -1)
+          NAME="sourceos-installer-aarch64.iso"
+          mkdir -p out && cp "$ISO" "out/$NAME"
+          ( cd out && sha256sum "$NAME" > "$NAME.sha256" )
+          ls -lh out
+      - uses: actions/upload-artifact@v4
+        with: { name: iso-aarch64, path: out/*, retention-days: 7 }
+
+  # ── Apple Silicon boot bundle (advanced/offline path) ────────────────────────
+  # Gated: needs the self-hosted aarch64 runner.
+  asahi-bundle:
+    name: build Apple Silicon boot bundle
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    if: github.event.inputs.build_asahi == 'true'
+    permissions: { contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
+      - name: Build m1n1 boot bundle
+        run: |
+          bash scripts/build-m1n1-bundle.sh out "${{ github.event.inputs.tag || github.ref_name }}"
+          ( cd out && tar -czf sourceos-asahi-boot-bundle.tar.gz m1n1.macho boot.bin BOOTAA64.EFI manifest.json 2>/dev/null || \
+            tar -czf sourceos-asahi-boot-bundle.tar.gz m1n1.macho manifest.json )
+          ls -lh out
+      - uses: actions/upload-artifact@v4
+        with: { name: asahi-bundle, path: out/*, retention-days: 7 }
+
+  # ── Apple Silicon seamless OS package (Asahi installer) ──────────────────────
+  # Gated: needs the self-hosted aarch64 runner + privileged loop mount.
+  asahi-package:
+    name: build Apple Silicon OS package
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    if: github.event.inputs.build_asahi == 'true'
+    permissions: { contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-nix
+        with:
+          cache-url: ${{ vars.NIX_CACHE_URL }}
+          cache-pubkey: ${{ vars.NIX_CACHE_PUBKEY }}
+      - name: Build SourceOS Asahi OS package
+        run: |
+          sudo -E env "PATH=$PATH" bash scripts/build-asahi-package.sh out "${{ github.event.inputs.tag || github.ref_name }}" || \
+            echo "asahi-package build failed (expected until validated on hw) — continuing"
+          ls -lh out 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: asahi-package, path: out/*, retention-days: 7, if-no-files-found: ignore }
+
+  # ── Publish to GitHub Release (+ optional GCS mirror) ────────────────────────
+  # Depends only on the x86_64 ISO so a GitHub download is produced on
+  # GitHub-hosted infra alone. ARM/Asahi assets are picked up when those gated
+  # jobs ran. GCS mirror is opt-in (your infra).
+  publish:
+    name: publish release
+    runs-on: ubuntu-latest
+    needs: [iso-x86_64, iso-aarch64, asahi-bundle, asahi-package]
+    if: always() && (needs.iso-x86_64.result == 'success' || needs.iso-aarch64.result == 'success')
+    permissions: { contents: write, id-token: write }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag/version
+        id: ver
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          case "$TAG" in *-rc*|*-beta*|*-alpha*) echo "prerelease=true" ;; *) echo "prerelease=false" ;; esac >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with: { path: dist }
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release
+          find dist -type f -exec cp {} release/ \;
+          # Asset names are already stable+versionless (sourceos-installer-<arch>.iso),
+          # so https://.../releases/latest/download/<name> resolves across versions.
+          ls -lh release
+
+      - name: Template installer_data.json for this release
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          VERSION="${{ steps.ver.outputs.version }}"
+          PKG_SHA="$(sha256sum release/*asahi-boot-bundle.tar.gz 2>/dev/null | awk '{print $1}')"
+          sed -e "s/\${TAG}/${TAG}/g" \
+              -e "s/\${VERSION}/${VERSION}/g" \
+              -e "s/\${PACKAGE_SHA256}/${PKG_SHA:-PENDING}/g" \
+              asahi/installer_data.json > release/installer_data.json
+          ( cd release && sha256sum * > SHA256SUMS 2>/dev/null || true )
+
+      - name: Create / update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          PRE=""; [ "${{ steps.ver.outputs.prerelease }}" = "true" ] && PRE="--prerelease"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" $PRE --title "SourceOS $TAG" \
+              --notes "SourceOS $TAG installable images. See https://github.com/SourceOS-Linux/source-os/blob/main/website/index.html"
+          fi
+          gh release upload "$TAG" release/* --clobber
+
+      # ── GCS mirror — opt-in (your infra). GitHub Release above is the source of truth. ──
+      - name: Authenticate to GCP
+        if: github.event.inputs.mirror_gcs == 'true'
+        continue-on-error: true
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Mirror to public GCS prefix
+        if: github.event.inputs.mirror_gcs == 'true'
+        continue-on-error: true
+        uses: google-github-actions/upload-cloud-storage@v2
+        with:
+          path: release
+          destination: ${{ env.GCS_BUCKET }}/public/releases/${{ steps.ver.outputs.tag }}
+          parent: false
+          process_gcloudignore: false
+
+      - name: Summary
+        run: |
+          echo "## SourceOS ${{ steps.ver.outputs.tag }} published" >> "$GITHUB_STEP_SUMMARY"
+          echo "GitHub Release: https://github.com/SourceOS-Linux/source-os/releases/tag/${{ steps.ver.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ github.event.inputs.mirror_gcs }}" = "true" ]; then
+            echo "GCS mirror: \`gs://${{ env.GCS_BUCKET }}/public/releases/${{ steps.ver.outputs.tag }}/\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          ls -lh release >> "$GITHUB_STEP_SUMMARY"

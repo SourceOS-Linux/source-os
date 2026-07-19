@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:srcos:source-os:schema:workstation-action-boundary:v0.1.0",
+  "title": "WorkstationActionBoundary",
+  "description": "Records the boundary between observation, planning, policy, and mutation in SourceOS workstation flows. Prevents doctor/report artifacts from implying mutations were performed, and prevents fix plans from implying policy admission.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "specVersion",
+    "artifact_kind",
+    "requested_action",
+    "mutation_planned",
+    "mutation_performed",
+    "evidence_refs"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "URN of this boundary record.",
+      "pattern": "^urn:srcos:workstation-action-boundary:.+"
+    },
+    "specVersion": {
+      "type": "string",
+      "const": "0.1.0"
+    },
+    "artifact_kind": {
+      "type": "string",
+      "description": "Which stage of the workstation flow produced this record.",
+      "enum": [
+        "doctor_report",
+        "fix_plan",
+        "admission_decision",
+        "applied_fix",
+        "post_fix_report"
+      ]
+    },
+    "evidence_refs": {
+      "type": "array",
+      "description": "URNs of evidence artifacts this record is based on (observations, probes, receipts).",
+      "items": { "type": "string" }
+    },
+    "policy_decision_refs": {
+      "type": "array",
+      "description": "URNs of policy/admission decisions that authorized any mutation. Required when mutation_performed is true.",
+      "items": { "type": "string" }
+    },
+    "requested_action": {
+      "type": "string",
+      "description": "The action that was requested (e.g., fix-shell, apply-profile, re-index)."
+    },
+    "mutation_planned": {
+      "type": "boolean",
+      "description": "Whether a mutation was proposed in this artifact (true for fix_plan, admission_decision, applied_fix)."
+    },
+    "mutation_performed": {
+      "type": "boolean",
+      "description": "Whether a mutation was actually executed. Must be false for doctor_report and fix_plan."
+    },
+    "performed_by": {
+      "type": "string",
+      "description": "Identity of the actor that performed the mutation. Required when mutation_performed is true."
+    },
+    "before_refs": {
+      "type": "array",
+      "description": "URNs of evidence capturing system state before mutation. Required when mutation_performed is true.",
+      "items": { "type": "string" }
+    },
+    "after_refs": {
+      "type": "array",
+      "description": "URNs of evidence capturing system state after mutation. Required when mutation_performed is true.",
+      "items": { "type": "string" }
+    },
+    "reversible": {
+      "type": "boolean",
+      "description": "Whether this mutation can be rolled back."
+    },
+    "rollback_refs": {
+      "type": "array",
+      "description": "URNs of rollback artifacts or procedures if reversible is true.",
+      "items": { "type": "string" }
+    },
+    "downstream_consumers": {
+      "type": "array",
+      "description": "Repos/services that consume this artifact (e.g., agentplane, sociosphere, prophet-cli). These are consumers, not implicit authorities.",
+      "items": { "type": "string" }
+    },
+    "sensitive_data_excluded": {
+      "type": "boolean",
+      "description": "Confirms that raw sensitive local data (credentials, raw prompt content, private keys) is not included in this record.",
+      "const": true
+    }
+  },
+  "if": {
+    "properties": { "mutation_performed": { "const": true } }
+  },
+  "then": {
+    "required": ["policy_decision_refs", "performed_by", "before_refs", "after_refs"]
+  }
+}

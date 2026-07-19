@@ -20,4 +20,4 @@ Scripts in this subtree are privileged or operational in nature and must be pair
 
 ## Temporary status
 
-This subtree exists in `SociOS-Linux/source-os` as a bootstrap landing zone until a dedicated runtime repository exists under `SourceOS-Linux`.
+This subtree exists in `SourceOS-Linux/source-os` as a bootstrap landing zone until a dedicated runtime repository exists under `SourceOS-Linux`.

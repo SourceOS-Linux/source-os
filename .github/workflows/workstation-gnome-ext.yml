@@ -1,0 +1,108 @@
+name: workstation-gnome-ext
+
+on:
+  pull_request:
+    paths:
+      - 'profiles/linux-dev/workstation-v0/gnome/check-gnome-extensions.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/extensions-install.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/README.md'
+      - '.github/workflows/workstation-gnome-ext.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'profiles/linux-dev/workstation-v0/gnome/check-gnome-extensions.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/extensions-install.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/README.md'
+      - '.github/workflows/workstation-gnome-ext.yml'
+
+jobs:
+  gnome-ext-smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check
+        run: |
+          set -euo pipefail
+          bash -n profiles/linux-dev/workstation-v0/gnome/check-gnome-extensions.sh
+          bash -n profiles/linux-dev/workstation-v0/gnome/extensions-install.sh
+
+      - name: Smoke: key presence in non-GNOME environment
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/gnome/check-gnome-extensions.sh'
+          out=$(bash "$helper")
+          grep -F 'gnome_detected='       <<<"$out" >/dev/null
+          grep -F 'gnome_extensions_cli=' <<<"$out" >/dev/null
+          grep -F 'gsettings='            <<<"$out" >/dev/null
+          grep -F 'dash_to_dock='         <<<"$out" >/dev/null
+          grep -F 'appindicator='         <<<"$out" >/dev/null
+          grep -F 'favorite_apps='        <<<"$out" >/dev/null
+          grep -F 'dock_position='        <<<"$out" >/dev/null
+          grep -F 'dock_autohide='        <<<"$out" >/dev/null
+          grep -F 'dock_intellihide='     <<<"$out" >/dev/null
+          # Non-GNOME CI runner: detected=no, extension status=unknown
+          grep -F 'gnome_detected=no'     <<<"$out" >/dev/null
+          grep -F 'dash_to_dock=unknown'  <<<"$out" >/dev/null
+          grep -F 'appindicator=unknown'  <<<"$out" >/dev/null
+
+      - name: Smoke: stub gnome-extensions CLI detects enabled extensions
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/gnome/check-gnome-extensions.sh'
+          stub_bin=$(mktemp -d)
+          # Both --enabled and plain list return the extensions (they are installed and enabled)
+          cat > "$stub_bin/gnome-extensions" <<'STUB'
+          #!/usr/bin/env bash
+          if [[ "${1:-}" == "list" && "${2:-}" == "--enabled" ]]; then
+            printf 'dash-to-dock@micxgx.gmail.com\n'
+            printf 'appindicatorsupport@rgcjonas.gmail.com\n'
+          elif [[ "${1:-}" == "list" ]]; then
+            printf 'dash-to-dock@micxgx.gmail.com\n'
+            printf 'appindicatorsupport@rgcjonas.gmail.com\n'
+          fi
+          STUB
+          chmod +x "$stub_bin/gnome-extensions"
+          out=$(PATH="$stub_bin:$PATH" bash "$helper")
+          grep -F 'gnome_extensions_cli=present' <<<"$out" >/dev/null
+          grep -F 'dash_to_dock=enabled'         <<<"$out" >/dev/null
+          grep -F 'appindicator=enabled'          <<<"$out" >/dev/null
+
+      - name: Smoke: stub gnome-extensions CLI detects present-but-not-enabled
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/gnome/check-gnome-extensions.sh'
+          stub_bin=$(mktemp -d)
+          # --enabled returns nothing; plain list returns both
+          cat > "$stub_bin/gnome-extensions" <<'STUB'
+          #!/usr/bin/env bash
+          if [[ "${1:-}" == "list" && "${2:-}" == "--enabled" ]]; then
+            exit 0
+          elif [[ "${1:-}" == "list" ]]; then
+            printf 'dash-to-dock@micxgx.gmail.com\n'
+            printf 'appindicatorsupport@rgcjonas.gmail.com\n'
+          fi
+          STUB
+          chmod +x "$stub_bin/gnome-extensions"
+          out=$(PATH="$stub_bin:$PATH" bash "$helper")
+          grep -F 'dash_to_dock=present'  <<<"$out" >/dev/null
+          grep -F 'appindicator=present'  <<<"$out" >/dev/null
+
+      - name: Smoke: stub gnome-extensions CLI detects missing extensions
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/gnome/check-gnome-extensions.sh'
+          stub_bin=$(mktemp -d)
+          # Empty list — nothing installed
+          cat > "$stub_bin/gnome-extensions" <<'STUB'
+          #!/usr/bin/env bash
+          exit 0
+          STUB
+          chmod +x "$stub_bin/gnome-extensions"
+          out=$(PATH="$stub_bin:$PATH" bash "$helper")
+          grep -F 'dash_to_dock=missing'  <<<"$out" >/dev/null
+          grep -F 'appindicator=missing'  <<<"$out" >/dev/null

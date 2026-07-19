@@ -1,0 +1,69 @@
+name: workstation-mac-defaults-validation
+
+on:
+  pull_request:
+    paths:
+      - 'profiles/linux-dev/workstation-v0/bin/check-mac-defaults.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/README.md'
+      - '.github/workflows/workstation-mac-defaults-validation.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'profiles/linux-dev/workstation-v0/bin/check-mac-defaults.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh'
+      - 'profiles/linux-dev/workstation-v0/gnome/README.md'
+      - '.github/workflows/workstation-mac-defaults-validation.yml'
+
+jobs:
+  mac-defaults-smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check mac-defaults scripts
+        run: |
+          set -euo pipefail
+          bash -n profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh
+          bash -n profiles/linux-dev/workstation-v0/bin/check-mac-defaults.sh
+
+      - name: "Smoke: helper emits required keys"
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/check-mac-defaults.sh'
+          out=$(bash "$helper")
+          grep -F 'mac_defaults_script=present' <<<"$out" >/dev/null
+          grep -F 'hot_corners_disabled='       <<<"$out" >/dev/null
+          grep -F 'clock_format_12h='           <<<"$out" >/dev/null
+          grep -F 'locate_pointer_enabled='     <<<"$out" >/dev/null
+          grep -F 'nautilus_double_click='      <<<"$out" >/dev/null
+          grep -F 'dock_favorites_seed='        <<<"$out" >/dev/null
+          grep -F 'files_binding_super_e='      <<<"$out" >/dev/null
+          grep -F 'terminal_binding_super_ret=' <<<"$out" >/dev/null
+          grep -F 'screenshot_binding_3='       <<<"$out" >/dev/null
+          grep -F 'screenshot_binding_4='       <<<"$out" >/dev/null
+          grep -F 'screenshot_binding_5='       <<<"$out" >/dev/null
+          grep -F 'screenshot_binding_6='       <<<"$out" >/dev/null
+          grep -F 'mac_defaults_ok='            <<<"$out" >/dev/null
+
+      - name: "Smoke: helper detects all required settings as present"
+        run: |
+          set -euo pipefail
+          helper='profiles/linux-dev/workstation-v0/bin/check-mac-defaults.sh'
+          out=$(bash "$helper")
+          grep -F 'hot_corners_disabled=present'       <<<"$out" >/dev/null
+          grep -F 'clock_format_12h=present'           <<<"$out" >/dev/null
+          grep -F 'locate_pointer_enabled=present'     <<<"$out" >/dev/null
+          grep -F 'nautilus_double_click=present'      <<<"$out" >/dev/null
+          grep -F 'dock_favorites_seed=present'        <<<"$out" >/dev/null
+          grep -F 'files_binding_super_e=present'      <<<"$out" >/dev/null
+          grep -F 'terminal_binding_super_ret=present' <<<"$out" >/dev/null
+          grep -F 'screenshot_binding_3=present'       <<<"$out" >/dev/null
+          grep -F 'screenshot_binding_4=present'       <<<"$out" >/dev/null
+          grep -F 'screenshot_binding_5=present'       <<<"$out" >/dev/null
+          grep -F 'screenshot_binding_6=present'       <<<"$out" >/dev/null
+          grep -F 'mac_defaults_ok=yes'                <<<"$out" >/dev/null

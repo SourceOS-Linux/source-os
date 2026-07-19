@@ -145,3 +145,4 @@ Notes:
 
 - `docs/repository-layout.md`
 - `docs/agentplane-integration.md`
+- `docs/workstation/shortcut-map.md` — bounded shortcut contract (active + proposed bindings)

@@ -1,26 +1,44 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CMD="${1:-help}"
 shift || true
 
+resolve_helper() {
+  local sibling="$1"
+  local repo_path="$2"
+  if [[ -x "$SCRIPT_DIR/$sibling" ]]; then
+    printf '%s\n' "$SCRIPT_DIR/$sibling"
+    return 0
+  fi
+  if [[ -x "$ROOT/$repo_path" ]]; then
+    printf '%s\n' "$ROOT/$repo_path"
+    return 0
+  fi
+  return 1
+}
+
 case "$CMD" in
   install)
-    "$ROOT/build/office-suite/scripts/install_sourceos_office_shell.sh"
+    "$(resolve_helper install_sourceos_office_shell.sh build/office-suite/scripts/install_sourceos_office_shell.sh)"
     ;;
   verify)
-    "$ROOT/build/office-suite/scripts/office_shell_verify.sh"
+    "$(resolve_helper office_shell_verify.sh build/office-suite/scripts/office_shell_verify.sh)"
     ;;
   open)
-    "$ROOT/build/office-suite/scripts/office_open.sh" "$@"
+    "$(resolve_helper office_open.sh build/office-suite/scripts/office_open.sh)" "$@"
     ;;
   search)
-    "$ROOT/build/office-suite/scripts/office_search_open.sh" "$@"
+    "$(resolve_helper office_search_open.sh build/office-suite/scripts/office_search_open.sh)" "$@"
+    ;;
+  new)
+    "$(resolve_helper office_new.sh build/office-suite/scripts/office_new.sh)" "$@"
     ;;
   help|*)
     cat <<'EOF'
-usage: sourceos-office <install|verify|open|search> [args]
+usage: sourceos-office <install|verify|open|search|new> [args]
 EOF
     ;;
 esac
