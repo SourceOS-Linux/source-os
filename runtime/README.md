@@ -2,7 +2,7 @@
 
 This subtree is the temporary implementation home for the Triune / Exodus runtime and enforcement spine.
 
-It exists here in `SociOS-Linux/source-os` only until a dedicated runtime repository is created under `SourceOS-Linux`.
+It exists here in `SourceOS-Linux/source-os` only until a dedicated runtime repository is created under `SourceOS-Linux`.
 
 ## Intended layout
 

@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# SourceOS workstation CLI (v0)
+# NOTE: This is intentionally dependency-light (bash + coreutils).
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROFILES_DIR="$ROOT_DIR/profiles"
+
+usage() {
+  cat <<'EOF'
+sourceos - SourceOS workstation helper
+
+Usage:
+  sourceos profile list
+  sourceos profile apply <profile>
+  sourceos doctor [<profile>]
+  sourceos index status [--json]
+  sourceos index explain --file <path>
+
+Notes:
+  - This CLI is the implementation surface. Design/RFCs live in SociOS-Linux/enhancements.
+  - Typed contract boundaries live in SourceOS-Linux/sourceos-spec.
+EOF
+}
+
+err() { printf "ERROR: %s\n" "$*" >&2; }
+info() { printf "INFO: %s\n" "$*" >&2; }
+
+profile_list() {
+  if [[ ! -d "$PROFILES_DIR" ]]; then
+    err "profiles directory not found: $PROFILES_DIR"
+    exit 2
+  fi
+  (cd "$PROFILES_DIR" && ls -1)
+}
+
+profile_apply() {
+  local profile=${1:-}
+  [[ -n "$profile" ]] || { err "profile name required"; usage; exit 2; }
+  local dir="$PROFILES_DIR/$profile"
+  local installer="$dir/install.sh"
+  [[ -x "$installer" ]] || { err "installer not found or not executable: $installer"; exit 2; }
+  exec "$installer"
+}
+
+doctor() {
+  local profile=${1:-workstation-v0}
+  local dir="$PROFILES_DIR/$profile"
+  local doc="$dir/doctor.sh"
+  [[ -x "$doc" ]] || { err "doctor not found or not executable: $doc"; exit 2; }
+  exec "$doc"
+}
+
+index_status() {
+  local json_mode=0
+  [[ "${1:-}" == "--json" ]] && json_mode=1
+
+  local queue_depth=0
+  local generation="stub-v0"
+  local failed_extractors=0
+  local paused_lanes=0
+  local policy_denied_count=0
+  local status="stub"
+  local note="sourceos-indexd is not yet running. This is the stub surface (issue #162)."
+
+  if [[ "$json_mode" -eq 1 ]]; then
+    printf '{"status":"%s","generation":"%s","queue_depth":%d,"failed_extractors":%d,"paused_lanes":%d,"policy_denied_count":%d,"note":"%s"}\n' \
+      "$status" "$generation" "$queue_depth" "$failed_extractors" "$paused_lanes" "$policy_denied_count" "$note"
+  else
+    printf "SourceOS Index Status\n"
+    printf "  status:              %s\n" "$status"
+    printf "  generation:          %s\n" "$generation"
+    printf "  queue_depth:         %d\n" "$queue_depth"
+    printf "  failed_extractors:   %d\n" "$failed_extractors"
+    printf "  paused_lanes:        %d\n" "$paused_lanes"
+    printf "  policy_denied_count: %d\n" "$policy_denied_count"
+    printf "  note:                %s\n" "$note"
+  fi
+}
+
+index_explain() {
+  local file=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --file) shift; file="${1:-}"; shift ;;
+      *) err "unknown option: $1"; exit 2 ;;
+    esac
+  done
+  [[ -n "$file" ]] || { err "--file <path> required"; exit 2; }
+
+  local abs_path
+  abs_path="$(realpath "$file" 2>/dev/null || echo "$file")"
+
+  printf '{"file":"%s","last_observed_event":"never","path_policy":"unknown","extractor_identity":"stub","receipt_status":"absent","generation_membership":"none","semantic_indexing_enabled":false,"cloud_exposure_enabled":false,"note":"sourceos-indexd stub (issue #162). Full explain requires indexd daemon."}\n' \
+    "$abs_path"
+}
+
+main() {
+  local cmd=${1:-}
+  case "$cmd" in
+    -h|--help|help|"")
+      usage
+      ;;
+    profile)
+      shift
+      local sub=${1:-}
+      case "$sub" in
+        list)
+          profile_list
+          ;;
+        apply)
+          shift
+          profile_apply "${1:-}"
+          ;;
+        *)
+          err "unknown profile subcommand: $sub"
+          usage
+          exit 2
+          ;;
+      esac
+      ;;
+    doctor)
+      shift
+      doctor "${1:-workstation-v0}"
+      ;;
+    index)
+      shift
+      local sub=${1:-}
+      case "$sub" in
+        status)
+          shift
+          index_status "${@}"
+          ;;
+        explain)
+          shift
+          index_explain "${@}"
+          ;;
+        *)
+          err "unknown index subcommand: $sub"
+          usage
+          exit 2
+          ;;
+      esac
+      ;;
+    *)
+      err "unknown command: $cmd"
+      usage
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,173 @@
+{
+  "nodes": {
+    "flake-compat": {
+      "locked": {
+        "lastModified": 1761640442,
+        "narHash": "sha256-AtrEP6Jmdvrqiv4x2xa5mrtaIp3OEe8uBYCDZDS+hu8=",
+        "owner": "nix-community",
+        "repo": "flake-compat",
+        "rev": "4a56054d8ffc173222d09dad23adf4ba946c8884",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "flake-compat",
+        "type": "github"
+      }
+    },
+    "lampstand-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780277257,
+        "narHash": "sha256-XAIGedyb3K8uoCaws1H5y+2qBDZL8vUETgqzQAa8Om0=",
+        "owner": "SocioProphet",
+        "repo": "lampstand",
+        "rev": "a33d251ecc3d30293d9a728f86f0a6bcec45b69c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "SocioProphet",
+        "repo": "lampstand",
+        "type": "github"
+      }
+    },
+    "nixlib": {
+      "locked": {
+        "lastModified": 1736643958,
+        "narHash": "sha256-tmpqTSWVRJVhpvfSN9KXBvKEXplrwKnSZNAoNPf/S/s=",
+        "owner": "nix-community",
+        "repo": "nixpkgs.lib",
+        "rev": "1418bc28a52126761c02dd3d89b2d8ca0f521181",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixpkgs.lib",
+        "type": "github"
+      }
+    },
+    "nixos-apple-silicon": {
+      "inputs": {
+        "flake-compat": "flake-compat",
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1781520503,
+        "narHash": "sha256-XuqQQG1qRyc3o8ld937sDLQNx+QrGV852KJ0dNglJDg=",
+        "owner": "tpwrules",
+        "repo": "nixos-apple-silicon",
+        "rev": "43043ad207529650f9fa68e1705f7cf9c08bfdeb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tpwrules",
+        "repo": "nixos-apple-silicon",
+        "type": "github"
+      }
+    },
+    "nixos-generators": {
+      "inputs": {
+        "nixlib": "nixlib",
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1769813415,
+        "narHash": "sha256-nnVmNNKBi1YiBNPhKclNYDORoHkuKipoz7EtVnXO50A=",
+        "owner": "nix-community",
+        "repo": "nixos-generators",
+        "rev": "8946737ff703382fda7623b9fab071d037e897d5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixos-generators",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1781074563,
+        "narHash": "sha256-md8WlXOlfnIeHeOScMTTHFyf2d6iaTwPl2apR5EQ3P4=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "9ae611a455b90cf061d8f332b977e387bda8e1ca",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "lampstand-src": "lampstand-src",
+        "nixos-apple-silicon": "nixos-apple-silicon",
+        "nixos-generators": "nixos-generators",
+        "nixpkgs": "nixpkgs",
+        "sops-nix": "sops-nix",
+        "sourceos-boot-src": "sourceos-boot-src",
+        "sourceos-syncd-src": "sourceos-syncd-src"
+      }
+    },
+    "sops-nix": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1780547341,
+        "narHash": "sha256-Gq8KNx5A7hBB3uGJaj6eQfLDIz5YdLu92gqBcvHvoUo=",
+        "owner": "Mic92",
+        "repo": "sops-nix",
+        "rev": "9ed65852b6257fbeae4355bc24ecfea307ca759a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Mic92",
+        "repo": "sops-nix",
+        "type": "github"
+      }
+    },
+    "sourceos-boot-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1781627411,
+        "narHash": "sha256-s44FGCVsp1gyuMEQEeQeH8BKjNAPfu81tNjni0mSaP8=",
+        "owner": "SourceOS-Linux",
+        "repo": "sourceos-boot",
+        "rev": "bc6dd8c09449e07e5a05a11c7b650eea19eb1b93",
+        "type": "github"
+      },
+      "original": {
+        "owner": "SourceOS-Linux",
+        "repo": "sourceos-boot",
+        "type": "github"
+      }
+    },
+    "sourceos-syncd-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1781630368,
+        "narHash": "sha256-z3tQB35G6oh+rKLV9hJtk0c3LtTDgVwSYDWy/6WtE2Y=",
+        "owner": "SourceOS-Linux",
+        "repo": "sourceos-syncd",
+        "rev": "a5762779dacc371bf35ce522b4cd3b0b7952a9ed",
+        "type": "github"
+      },
+      "original": {
+        "owner": "SourceOS-Linux",
+        "repo": "sourceos-syncd",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

@@ -1,0 +1,91 @@
+name: workstation-status-polish
+
+on:
+  pull_request:
+    paths:
+      - 'profiles/linux-dev/workstation-v0/bin/sourceos'
+      - 'profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh'
+      - '.github/workflows/workstation-status-polish.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'profiles/linux-dev/workstation-v0/bin/sourceos'
+      - 'profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh'
+      - '.github/workflows/workstation-status-polish.yml'
+
+jobs:
+  status-polish-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check sourceos helper
+        run: |
+          set -euo pipefail
+          bash -n profiles/linux-dev/workstation-v0/bin/sourceos
+
+      - name: Smoke: status JSON shape survives aggregate polish warnings
+        run: |
+          set -euo pipefail
+          f='profiles/linux-dev/workstation-v0/bin/sourceos'
+          tmp_profile=$(mktemp -d)
+          mkdir -p "$tmp_profile/bin"
+          cp "$f" "$tmp_profile/bin/sourceos"
+          cat > "$tmp_profile/bin/check-workstation-polish.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf 'mac_polish.helper=present\n'
+          printf 'keyboard_policy.helper=present\n'
+          printf 'keyboard_policy.policy_ok=yes\n'
+          EOF
+          chmod +x "$tmp_profile/bin/check-workstation-polish.sh"
+
+          set +e
+          out=$(SOURCEOS_PROFILE_DIR="$tmp_profile" bash "$tmp_profile/bin/sourceos" status --json)
+          rc=$?
+          set -e
+
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+            echo "Unexpected exit code: $rc" >&2
+            exit 1
+          fi
+
+          python3 -c 'import json,sys
+j=json.loads(sys.stdin.read())
+assert set(j)=={"profile","ok","gnome","required_missing","optional_missing","warnings"}, sorted(j)
+assert isinstance(j["warnings"], list)
+print("status-json-schema: ok")' <<<"$out"
+
+      - name: Smoke: invalid aggregate keyboard policy emits warning without schema change
+        run: |
+          set -euo pipefail
+          f='profiles/linux-dev/workstation-v0/bin/sourceos'
+          tmp_profile=$(mktemp -d)
+          mkdir -p "$tmp_profile/bin"
+          cp "$f" "$tmp_profile/bin/sourceos"
+          cat > "$tmp_profile/bin/check-workstation-polish.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf 'mac_polish.helper=present\n'
+          printf 'keyboard_policy.helper=present\n'
+          printf 'keyboard_policy.policy_ok=no\n'
+          EOF
+          chmod +x "$tmp_profile/bin/check-workstation-polish.sh"
+
+          set +e
+          out=$(SOURCEOS_PROFILE_DIR="$tmp_profile" bash "$tmp_profile/bin/sourceos" status --json)
+          rc=$?
+          set -e
+
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+            echo "Unexpected exit code: $rc" >&2
+            exit 1
+          fi
+
+          python3 -c 'import json,sys
+j=json.loads(sys.stdin.read())
+assert set(j)=={"profile","ok","gnome","required_missing","optional_missing","warnings"}, sorted(j)
+assert "keyboard policy is not valid" in j["warnings"]
+print("status-warning: ok")' <<<"$out"

@@ -1,0 +1,98 @@
+name: workstation-doctor-polish
+
+on:
+  pull_request:
+    paths:
+      - 'profiles/linux-dev/workstation-v0/doctor.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh'
+      - '.github/workflows/workstation-doctor-polish.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'profiles/linux-dev/workstation-v0/doctor.sh'
+      - 'profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh'
+      - '.github/workflows/workstation-doctor-polish.yml'
+
+jobs:
+  doctor-polish-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Syntax check doctor
+        run: |
+          set -euo pipefail
+          bash -n profiles/linux-dev/workstation-v0/doctor.sh
+
+      - name: Smoke: doctor JSON shape survives valid aggregate polish
+        run: |
+          set -euo pipefail
+          doctor='profiles/linux-dev/workstation-v0/doctor.sh'
+          helper='profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh'
+          backup=$(mktemp)
+          cp "$helper" "$backup"
+          restore(){ cp "$backup" "$helper"; }
+          trap restore EXIT
+          cat > "$helper" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf 'mac_polish.helper=present\n'
+          printf 'keyboard_policy.helper=present\n'
+          printf 'keyboard_policy.policy_ok=yes\n'
+          EOF
+          chmod +x "$helper"
+
+          set +e
+          out=$(bash "$doctor" --json)
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+            echo "Unexpected exit code: $rc" >&2
+            exit 1
+          fi
+          python3 -c 'import json,sys
+j=json.loads(sys.stdin.read())
+assert j["kind"]=="sourceos.doctor"
+assert j["profile"]=="linux-dev/workstation-v0"
+assert set(j)>= {"kind","profile","ok","summary","results"}
+assert isinstance(j["results"], list)
+print("doctor-json-schema: ok")' <<<"$out"
+          grep -F '"name":"mac-polish-helper"' <<<"$out" >/dev/null
+          grep -F '"name":"keyboard-policy-helper"' <<<"$out" >/dev/null
+          grep -F '"name":"keyboard-policy"' <<<"$out" >/dev/null
+
+      - name: Smoke: invalid aggregate keyboard policy is warning-only
+        run: |
+          set -euo pipefail
+          doctor='profiles/linux-dev/workstation-v0/doctor.sh'
+          helper='profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh'
+          backup=$(mktemp)
+          cp "$helper" "$backup"
+          restore(){ cp "$backup" "$helper"; }
+          trap restore EXIT
+          cat > "$helper" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          printf 'mac_polish.helper=present\n'
+          printf 'keyboard_policy.helper=present\n'
+          printf 'keyboard_policy.policy_ok=no\n'
+          EOF
+          chmod +x "$helper"
+
+          set +e
+          out=$(bash "$doctor" --json)
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+            echo "Unexpected exit code: $rc" >&2
+            exit 1
+          fi
+          python3 -c 'import json,sys
+j=json.loads(sys.stdin.read())
+assert j["kind"]=="sourceos.doctor"
+assert j["profile"]=="linux-dev/workstation-v0"
+assert isinstance(j["results"], list)
+assert any(r.get("name")=="keyboard-policy" and r.get("level")=="warn" for r in j["results"])
+print("doctor-polish-warning: ok")' <<<"$out"

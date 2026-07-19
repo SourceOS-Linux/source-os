@@ -3,6 +3,7 @@
   "system": "x86_64-linux",
   "role": "canary-x86_64",
   "channel": "candidate",
+  "content_view": "sourceos-x86_64",
   "host_config": "hosts/canary-x86_64/default.nix",
   "profile": "profiles/linux-candidate/default.nix",
   "image": "images/canary-x86_64.nix"

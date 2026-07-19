@@ -1,0 +1,4 @@
+[Unit]
+Description=SourceOS shell service graph
+Wants=sourceos-shell.service sourceos-router.service sourceos-pdf-secure.service sourceos-docd.service
+After=network-online.target

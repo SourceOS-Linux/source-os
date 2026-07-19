@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.socios.dev/source-os/workstation-action-boundary.schema.json",
+  "title": "SourceOS Workstation Action Boundary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "boundaryId",
+    "artifactKind",
+    "profile",
+    "requestedAction",
+    "evidenceRefs",
+    "policyDecisionRefs",
+    "mutation",
+    "downstreamConsumers"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "sourceos.workstation-action-boundary.v0.1" },
+    "kind": { "const": "WorkstationActionBoundary" },
+    "boundaryId": { "type": "string", "pattern": "^workstation-action-boundary:" },
+    "artifactKind": {
+      "type": "string",
+      "enum": ["doctor_report", "fix_plan", "admission_decision", "applied_fix", "post_fix_report"]
+    },
+    "profile": { "const": "linux-dev/workstation-v0" },
+    "requestedAction": { "type": "string", "minLength": 1 },
+    "evidenceRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "policyDecisionRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "mutation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["planned", "performed", "performedBy", "beforeRefs", "afterRefs", "reversible", "rollbackRefs", "summary"],
+      "properties": {
+        "planned": { "type": "boolean" },
+        "performed": { "type": "boolean" },
+        "performedBy": { "type": ["string", "null"] },
+        "beforeRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "afterRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "reversible": { "type": "boolean" },
+        "rollbackRefs": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "summary": { "type": "string" }
+      }
+    },
+    "downstreamConsumers": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rawSensitiveDataIncluded", "redactedOnly"],
+      "properties": {
+        "rawSensitiveDataIncluded": { "const": false },
+        "redactedOnly": { "const": true }
+      }
+    },
+    "notes": { "type": "string" }
+  }
+}
