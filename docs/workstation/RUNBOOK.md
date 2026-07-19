@@ -1,75 +1,89 @@
 # Workstation v0 Runbook (linux-dev)
 
-This runbook is the operational guide for the **SourceOS Workstation Profile v0** Mac-on-Linux lane.
+This runbook is the operational “how we actually use it” guide for the **SourceOS Workstation Profile v0**.
 
 Target profile:
-
 - `profiles/linux-dev/workstation-v0/`
 
 Key properties:
-
 - CLI-first, keyboard-first.
-- GNOME customization is behavioral: GSettings, extensions, helper scripts, and packaged GNOME components.
-- `sourceos` is installed as a profile-pinned wrapper.
-- The launcher palette is open-source and Wayland-first.
-- Mac-on-Linux behavior is bounded GNOME polish, not a full macOS clone.
+- GNOME customization is **behavioral** (GSettings + extensions), no GNOME core forks.
+- `sourceos` is installed as a **profile-pinned wrapper** (stable command surface).
+- SourceOS uses an **open-source launcher palette** (Wayland-first) for Super+Space.
 
 ---
 
 ## 0) Preconditions
 
-Expected host:
-
-- Fedora / Silverblue / CoreOS-derived host, or another Linux host with `dnf` or `rpm-ostree`.
-- GNOME session for desktop integration.
-- Homebrew/Linuxbrew available for the user-layer CLI toolset.
+We assume:
+- Fedora / Silverblue / CoreOS-derived host, or any Linux host with `dnf` or `rpm-ostree`.
+- GNOME session if you want the GNOME integration.
 
 Quick checks:
 
 ```bash
-uname -a && echo "XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-}" && command -v rpm-ostree || true && command -v dnf || true && command -v brew || true
+uname -a && echo "XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-}" && command -v rpm-ostree || true && command -v dnf || true
 ```
 
-If Homebrew/Linuxbrew is missing, install it first before expecting the full user-layer toolset to apply.
+If Homebrew/Linuxbrew is not installed, install it first.
 
 ---
 
-## 1) Apply the profile
+## 1) Apply the profile (repo-local)
 
-From the repository root:
+From the repo root:
 
 ```bash
 ./profiles/linux-dev/workstation-v0/install.sh
 ```
 
-What the installer applies:
+The install sequence runs these steps in order:
 
-- System package layer: `git`, `openssh-clients`, `podman`, `toolbox`, clipboard tools, `jq`, `sushi`, and `gnome-screenshot`.
-- User CLI layer via the manifest-driven brew list.
-- Shell spine files under `$XDG_CONFIG_HOME/sourceos/shell/`.
-- `sourceos` wrapper under `~/.local/bin/sourceos`.
-- `mac-screenshot.sh` wrapper under `~/.local/bin/mac-screenshot.sh`.
-- Lampstand install lane, best effort.
-- GNOME baseline, extension pinset, bounded appearance defaults, sidebar bookmarks, input/remap lane, Fusuma gesture lane, launcher install, palette hotkey, and mac-like defaults.
+1. **SYSTEM packages** (`install_system`) — installs via `rpm-ostree` or `dnf`:
+   `git openssh-clients podman toolbox wl-clipboard jq xclip sushi gnome-screenshot`
+2. **USER packages** (`install_user`) — installs via `brew` (manifest-driven)
+3. **Shell spine** (`install_shell_spine`) — writes `$XDG_CONFIG_HOME/sourceos/shell/common.{sh,fish}`
+4. **sourceos CLI** (`install_sourceos_cli`) — links helper to `~/.local/bin/sourceos`
+5. **Lampstand backend** (`install_lampstand_backend`) — best-effort, non-fatal
+6. **Shell autopatch** (`patch_shell_rc_if_enabled`) — only if `SOURCEOS_AUTOPATCH_SHELL=1`
+7. **GNOME baseline** (`apply_gnome_baseline`)
+8. **GNOME extensions** (`apply_gnome_extensions`)
+9. **GNOME appearance defaults** (`apply_gnome_appearance`)
+10. **Files sidebar defaults** (`apply_files_sidebar`)
+11. **Input/remap lane** (`apply_input_install`)
+12. **Fusuma gesture lane** (`apply_fusuma_install` + `apply_fusuma_config`)
+13. **Launcher** (`apply_launcher_install`)
+14. **Palette hotkey** (`apply_palette_hotkey`)
+15. **Mac-like GNOME defaults pack** (`apply_mac_defaults`)
 
-### rpm-ostree reboot note
+### rpm-ostree reboot notes
 
-On rpm-ostree systems, newly layered packages may not be active until reboot.
+On Silverblue / CoreOS and any `rpm-ostree`-based host, SYSTEM packages are
+**layered asynchronously**. The install script prints:
 
-After install, reboot when rpm-ostree reports a pending deployment:
-
-```bash
-rpm-ostree status
-systemctl reboot
+```
+INFO: If new packages were layered, reboot before continuing.
 ```
 
-After reboot, log into GNOME again and rerun validation.
+**Required reboot sequence:**
 
----
+```bash
+# Step 1 — layer system packages (may succeed silently if already present)
+./profiles/linux-dev/workstation-v0/install.sh
 
-## 2) Optional shell/fish autopatch
+# Step 2 — reboot if new layers were applied
+rpm-ostree status          # check pending deployment
+sudo systemctl reboot      # reboot into the new deployment
 
-To let the installer patch shell/fish config files:
+# Step 3 — after reboot, re-run to complete user-space steps
+./profiles/linux-dev/workstation-v0/install.sh
+```
+
+Steps 2–15 (user-space) are idempotent and safe to re-run.
+
+### Optional: autopatch shell/fish config
+
+If you want the installer to also patch your shell config files, run:
 
 ```bash
 SOURCEOS_AUTOPATCH_SHELL=1 ./profiles/linux-dev/workstation-v0/install.sh
@@ -91,62 +105,77 @@ sourceos fix fish apply
 sourceos fix fish revert
 ```
 
-Low-level helpers remain available:
+`fix all` orchestrates:
+- bash/zsh rc patch helper
+- fish config patch helper
+
+Low-level helpers remain available too:
 
 ```bash
 ./profiles/linux-dev/workstation-v0/bin/patch-all.sh dry-run
+./profiles/linux-dev/workstation-v0/bin/patch-all.sh apply
+./profiles/linux-dev/workstation-v0/bin/patch-all.sh revert
+
 ./profiles/linux-dev/workstation-v0/bin/patch-shell.sh dry-run
+./profiles/linux-dev/workstation-v0/bin/patch-shell.sh apply
+./profiles/linux-dev/workstation-v0/bin/patch-shell.sh revert
+
 ./profiles/linux-dev/workstation-v0/bin/patch-fish.sh dry-run
+./profiles/linux-dev/workstation-v0/bin/patch-fish.sh apply
+./profiles/linux-dev/workstation-v0/bin/patch-fish.sh revert
 ```
 
 ---
 
-## 3) Ensure PATH includes user wrappers
+## 2) Launcher palette (open-source)
 
-Check:
-
-```bash
-command -v sourceos && command -v mac-screenshot.sh && printf '%s\n' "$PATH" | tr ':' '\n' | grep -F "$HOME/.local/bin"
-```
-
-If missing, add this to the relevant shell rc:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
----
-
-## 4) Launcher palette
-
-SourceOS uses an open-source launcher palette for `Super+Space`.
+SourceOS uses an open-source launcher palette for Super+Space.
 
 Priority order:
+1) `fuzzel` (Wayland-first, MIT)
+2) `wofi` (GPL-3.0-only)
+3) `rofi` (GPL)
+4) terminal fallback: `fzf`
 
-1. `fuzzel` for Wayland-first usage.
-2. `wofi` fallback.
-3. `rofi` fallback.
-4. terminal fallback: `fzf`.
-
-Invoke directly:
+The palette is invoked by:
 
 ```bash
 sourceos palette
 ```
 
-The palette exposes profile actions, validation reports, Lampstand search/runtime commands, and common TUI tools.
+The palette includes:
+- fix all configs (dry-run/apply/revert)
+- fix shell rc (dry-run/apply/revert)
+- fix fish config (dry-run/apply/revert)
+- status / doctor
+- profile apply
+- common TUI tools
 
 ---
 
-## 5) Mac-on-Linux validation commands
+## 3) Ensure PATH includes ~/.local/bin
 
-Run the general status and doctor surfaces:
+`sourceos` is installed to `~/.local/bin/sourceos`.
+
+Check:
+
+```bash
+command -v sourceos && echo "$PATH" | tr ':' '\n' | head
+```
+
+If missing:
+- Add `export PATH="$HOME/.local/bin:$PATH"` to your shell rc.
+
+---
+
+## 4) Validate health
+
+Terminal validation:
 
 ```bash
 sourceos status
 sourceos status --json
 sourceos doctor
-sourceos doctor --json
 ```
 
 Launcher-friendly reports:
@@ -157,98 +186,149 @@ sourceos doctor --open
 ```
 
 Exit codes:
+- `0` = OK
+- `2` = FAIL (missing required components)
 
-- `0` means OK.
-- `2` means missing required components or a hard profile failure.
+### Warnings vs hard failures
 
-Warnings in `status` and `doctor` are not automatically hard failures. Warnings usually indicate optional polish, desktop integration, or runtime services that are not installed, enabled, or active yet.
+The doctor surface uses three signal levels:
+
+| Level   | Meaning                                              | Blocks install? |
+|---------|------------------------------------------------------|-----------------|
+| `ok`    | Component present and correctly configured.          | No              |
+| `warn`  | Component missing or misconfigured but non-required. | No (soft gap)   |
+| `error` | Required component absent; doctor exits `2`.         | Yes             |
+| `info`  | Informational probe result (no verdict).             | No              |
+
+**Hard failures (exit 2):** missing `git`, `ssh`, `podman`, `toolbox`, `wl-copy`,
+`jq`, `brew`, `sourceos` binding, or `fzf`/`atuin`/`bat`/`zoxide`/`eza`/`yazi`/`gum`/
+`direnv`/`rg`/`fd`/`tmux`/`lazygit`/`gh`/`tig`/`sesh`/`procs`/`sd`/`entr`/`curlie`/
+`jnv`/`gojq`/`rclone`/`mc`/`rsync`.
+
+**Warnings (non-blocking):** missing launcher (fuzzel/wofi/rofi), input-remapper/
+xremap/xkeysnail, fusuma or fusuma config/service, xclip (X11 only), Lampstand
+backend, or any GNOME mac-defaults gsettings mismatch.
+
+Triage workflow:
+
+```bash
+# Quick pass — non-zero exit means hard failure
+sourceos doctor; echo "exit: $?"
+
+# Machine-readable view of all levels
+sourceos doctor --json | python3 -m json.tool
+
+# Count each level
+sourceos doctor --json | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+s=d['summary']
+print(f\"ok={s['ok']} warn={s['warn']} error={s['error']} info={s['info']}\")
+"
+```
 
 ---
 
-## 6) Mac polish checks
+## 5) Mac polish helper
 
-Run the aggregate workstation polish helper:
-
-```bash
-./profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh
-```
-
-Run component helpers directly:
+Validate the Mac-on-Linux polish surface (screenshot bindings, Sushi, `mac-screenshot.sh`
+wrapper) with the dedicated check helper:
 
 ```bash
 ./profiles/linux-dev/workstation-v0/bin/check-mac-polish.sh
-./profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh
 ```
 
-Expected output style is `key=value` so the results can feed CI, status, and doctor surfaces.
+Expected key=value output (all `present` is ideal; `missing` is non-fatal):
 
-Screenshot helper checks:
+```
+screenshot_helper=present       # mac-screenshot.sh in profile bin/
+screenshot_wrapper=present      # mac-screenshot.sh reachable on PATH
+gnome_screenshot=present        # gnome-screenshot package installed
+sushi=present                   # sushi Quick Look previewer installed
+screenshot_dir=present          # ~/Pictures/Screenshots directory exists
+gsettings=present               # GNOME settings daemon reachable
+custom3_slot=present            # Super+Shift+3 slot registered
+custom4_slot=present            # Super+Shift+4 slot registered
+custom5_slot=present            # Super+Shift+5 slot registered
+custom6_slot=present            # Super+Shift+6 slot registered
+```
+
+Screenshot helper commands (copy/pasteable):
 
 ```bash
-mac-screenshot.sh screen
-mac-screenshot.sh area
-mac-screenshot.sh window
-mac-screenshot.sh interactive
-mac-screenshot.sh open-dir
+mac-screenshot.sh screen        # full-screen capture → ~/Pictures/Screenshots/
+mac-screenshot.sh area          # interactive area capture
+mac-screenshot.sh window        # window capture
+mac-screenshot.sh interactive   # GNOME interactive screenshot UI
+mac-screenshot.sh open-dir      # open ~/Pictures/Screenshots in Files
 ```
 
-Default screenshot directory:
-
-```bash
-ls -la "$HOME/Pictures/Screenshots"
-```
-
-Quick preview check:
-
-```bash
-command -v sushi
-```
+Quick Look preview: press `Space` on any file in Nautilus (requires `sushi` package).
 
 ---
 
-## 7) Keyboard/remap policy checks
+## 6) Keyboard policy helper
 
-Default policy:
-
-- `input-remapper` is the primary Fedora/GNOME backend.
-- `xremap` is an explicit compatibility lane.
-- Kinto is an explicit X11/xkeysnail compatibility lane and is not auto-installed by the Wayland-first profile.
-
-Validate policy:
+Validate the keyboard remap policy (input-remapper primary, xremap/kinto compat):
 
 ```bash
 ./profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh
+```
+
+Expected key=value output:
+
+```
+default_backend=input-remapper
+primary_backend=input-remapper
+compatibility_backends=xremap,kinto
+wayland_first=yes
+kinto_auto_install=no
+selected_backend=input-remapper
+backend_valid=yes
+selected_backend_available=present   # input-remapper binary reachable
+input_remapper=present               # input-remapper-control on PATH
+input_installer=present              # gnome/input-install.sh in profile
+policy_ok=yes
+```
+
+Override the selected backend without changing host config:
+
+```bash
 SOURCEOS_REMAP_BACKEND=xremap ./profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh
-SOURCEOS_REMAP_BACKEND=invalid ./profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh
 ```
 
-Generate the xremap compatibility template:
-
-```bash
-SOURCEOS_REMAP_BACKEND=xremap ./profiles/linux-dev/workstation-v0/gnome/input-install.sh
-cat "${XDG_CONFIG_HOME:-$HOME/.config}/sourceos/input/xremap-macos-compat.yml"
-```
+`policy_ok=yes` is the acceptance signal; anything else indicates a policy
+violation (unknown backend or selected backend not installed).
 
 ---
 
-## 8) Lampstand checks
+## 7) Lampstand checks
 
-Search:
+Validate the Lampstand search surface:
+
+```bash
+# Check binary / Python module availability and search-helper script
+sourceos doctor --json | python3 -c "
+import json,sys
+for r in json.load(sys.stdin)['results']:
+    if 'lampstand' in r['name']:
+        print(r['level'].upper(), r['name'], '-', r['message'])
+"
+
+# Check user systemd unit (file / enabled / active)
+./profiles/linux-dev/workstation-v0/bin/check-lampstand-unit.sh
+```
+
+Runtime search commands:
 
 ```bash
 sourceos search 'report OR invoice' --snippet
-sourceos search --prompt --snippet --open
-```
-
-Runtime inspection:
-
-```bash
 sourceos search health --open
 sourceos search stats --open
 sourceos search index --root "$HOME"
 ```
 
-User unit controls:
+Unit lifecycle commands:
 
 ```bash
 sourceos search service status --open
@@ -257,97 +337,81 @@ sourceos search service enable
 sourceos search service logs --open
 ```
 
-Unit helper:
-
-```bash
-./profiles/linux-dev/workstation-v0/bin/check-lampstand-unit.sh
-```
+Lampstand failures are **warnings**, not hard failures. The search surface
+degrades gracefully when the backend is absent.
 
 ---
 
-## 9) GNOME integration checks
+## 8) GNOME integration
 
-Hotkeys applied by `gnome/mac-defaults.sh` include:
+### Hotkey
 
-- `Super+Space` for SourceOS palette.
-- `Super+E` for Files.
-- `Super+Return` for Terminal.
-- `Super+Shift+3` for full-screen screenshot.
-- `Super+Shift+4` for area screenshot.
-- `Super+Shift+5` for interactive screenshot UI.
-- `Super+Shift+6` for screenshots folder.
+The profile applies a GNOME custom keybinding:
+- `<Super>space` → `sourceos palette`
 
-Inspect GNOME bindings:
+If GNOME doesn’t pick it up immediately, log out/in.
 
-```bash
-gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings
-```
+### Extensions
 
-Extensions:
+The profile enables:
+- dash-to-dock
+- appindicator
 
-```bash
-gnome-extensions list | grep -E 'dash-to-dock|appindicator' || true
-```
-
-GNOME changes may require logout/login after package layering or extension installation.
+On `rpm-ostree`, GNOME shell extensions may require reboot/logout after install.
 
 ---
 
-## 10) Acceptance matrix
+## 9) One-line acceptance test
 
-The current implemented, validation-backed, planned, and non-goal states are tracked in:
+After install, this should succeed:
 
 ```bash
-cat docs/workstation/mac-on-linux-acceptance.md
+sourceos status --json && sourceos doctor
 ```
 
-Use that matrix for review and handoff. Planned items are not counted as delivered until there is a GitHub PR, branch, commit, or merge with validation evidence.
+And on GNOME, you should be able to:
+- press `<Super>space` to open the SourceOS palette
+- run SourceOS actions from the palette
 
 ---
 
-## 11) Warnings vs hard failures
+## 10) Known gaps and non-goals
 
-Treat warnings as triage items, not automatic blockers.
+### Known gaps (warnings, not blockers)
 
-Typical warnings:
+- **Lampstand backend** — installed best-effort via `pipx`; absent on fresh systems until
+  `bin/install-lampstand.sh` completes successfully.  Doctor emits `warn`, not `error`.
+- **fusuma** — gesture lane is best-effort; `fusuma` binary and user service are optional.
+  User must be in the `input` group for fusuma to access devices.
+- **GNOME extensions** — `dash-to-dock` and `appindicator` are installed best-effort.
+  Extension activation may require a logout/reboot on immutable hosts.
+- **xclip** — only needed on X11; absence on a pure Wayland session is expected.
+- **mac-screenshot.sh PATH** — the wrapper is copied to `~/.local/bin` by
+  `install-sourceos-cli.sh`; it only appears on PATH after a shell restart or
+  `hash -r`.
+- **GNOME mac-defaults gsettings** — mismatches emit `warn` (not `error`), meaning the
+  mac-defaults pack may not yet have taken effect on the running session.
 
-- GNOME not detected in a headless/CI environment.
-- Optional desktop polish helpers unavailable.
-- Lampstand user unit not active yet.
-- GNOME extensions not visible until logout/login.
-- Runtime package not active until rpm-ostree reboot.
+### Non-goals
 
-Treat hard failures as blockers when:
-
-- `sourceos status` exits `2` due to missing required CLI/runtime basics.
-- `sourceos doctor --json` does not parse.
-- Required wrappers are missing after install.
-- A helper script has syntax errors.
-
----
-
-## 12) Known gaps and non-goals
-
-Known gaps:
-
-- Full doctor integration for aggregate polish is tracked separately.
-- Dock/extension validation helper is tracked separately.
-- Shortcut map contract is tracked separately.
-- `sourceos-spec` alignment is tracked separately.
-
-Non-goals for workstation-v0:
-
-- No full macOS clone claim.
-- No GNOME Shell fork.
-- No libadwaita replacement.
-- No proprietary asset requirement.
-- No production readiness claim from fixture or helper validation alone.
+- **Production readiness** — workstation-v0 is a developer-profile lane, not a
+  hardened or production-certified configuration.
+- **Non-GNOME desktops** — KDE, XFCE, and other desktops are out of scope.
+  Mac polish and launcher sections are GNOME-specific.
+- **Non-Fedora/Silverblue hosts** — the SYSTEM layer assumes `rpm-ostree` or `dnf`.
+  Debian/Ubuntu and Arch hosts are not tested.
+- **Modifying implementation scripts** — this runbook documents existing behavior;
+  it does not alter `install.sh`, `doctor.sh`, or any helper script.
+- **Kinto auto-install** — kinto is a supported compatibility lane but is not
+  auto-installed; `kinto_auto_install=no` is the explicit policy.
+- **CI workflow changes** — this runbook addition does not require workflow modifications.
 
 ---
 
 ## References
 
 - `docs/workstation/README.md`
-- `docs/workstation/mac-on-linux-acceptance.md`
 - `profiles/linux-dev/workstation-v0/`
-- `profiles/linux-dev/workstation-v0/gnome/README.md`
+- `profiles/linux-dev/workstation-v0/bin/check-mac-polish.sh`
+- `profiles/linux-dev/workstation-v0/bin/check-keyboard-policy.sh`
+- `profiles/linux-dev/workstation-v0/bin/check-lampstand-unit.sh`

@@ -1,0 +1,8 @@
+# SourceOS Workstation Spine (Bash)
+
+SOURCEOS_SPINE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/sourceos/shell"
+
+if [[ -f "$SOURCEOS_SPINE_DIR/common.sh" ]]; then
+  # shellcheck source=/dev/null
+  . "$SOURCEOS_SPINE_DIR/common.sh"
+fi

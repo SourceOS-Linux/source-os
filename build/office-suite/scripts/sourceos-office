@@ -33,9 +33,12 @@ case "$CMD" in
   search)
     "$(resolve_helper office_search_open.sh build/office-suite/scripts/office_search_open.sh)" "$@"
     ;;
+  new)
+    "$(resolve_helper office_new.sh build/office-suite/scripts/office_new.sh)" "$@"
+    ;;
   help|*)
     cat <<'EOF'
-usage: sourceos-office <install|verify|open|search> [args]
+usage: sourceos-office <install|verify|open|search|new> [args]
 EOF
     ;;
 esac

@@ -25,10 +25,10 @@ Status values:
 | Lampstand-backed local file search | validation-backed | `profiles/linux-dev/workstation-v0/bin/sourceos-search.sh`; `profiles/linux-dev/workstation-v0/bin/install-lampstand.sh`; `.github/workflows/workstation-lampstand.yml` | Lampstand is the file authority; launcher remains action bus. |
 | Aggregate polish validation | validation-backed | `profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh`; `.github/workflows/workstation-polish-validation.yml` | Aggregates Mac polish and keyboard policy signals. |
 | Status warnings for aggregate polish | validation-backed | `profiles/linux-dev/workstation-v0/bin/sourceos`; `.github/workflows/workstation-status-polish.yml` | Adds warnings without changing status JSON shape. |
-| Doctor integration for aggregate polish | planned | `SociOS-Linux/source-os#120` | Issue-first work packet exists; not counted delivered until GitHub artifact exists. |
-| Dock / extension validation helper | planned | `SociOS-Linux/source-os#130` | Issue-first work packet exists; no verified GitHub artifact yet. |
-| Shortcut map contract | planned | `SociOS-Linux/source-os#126` | Issue-first work packet exists; no verified GitHub artifact yet. |
-| Operator runbook | planned | `SociOS-Linux/source-os#132` | Issue-first work packet exists; no verified GitHub artifact yet. |
+| Doctor integration for aggregate polish | planned | `SourceOS-Linux/source-os#120` | Issue-first work packet exists; not counted delivered until GitHub artifact exists. |
+| Dock / extension validation helper | planned | `SourceOS-Linux/source-os#130` | Issue-first work packet exists; no verified GitHub artifact yet. |
+| Shortcut map contract | planned | `SourceOS-Linux/source-os#126` | Issue-first work packet exists; no verified GitHub artifact yet. |
+| Operator runbook | planned | `SourceOS-Linux/source-os#132` | Issue-first work packet exists; no verified GitHub artifact yet. |
 | Full macOS UI clone | non-goal | This document | Workstation-v0 targets bounded GNOME behavior, not shell replacement or proprietary asset cloning. |
 | Proprietary dependency requirement | non-goal | This document | Open, self-hostable, auditable components are preferred. |
 

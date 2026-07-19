@@ -17,9 +17,11 @@ OPEN_BIN="$HOME/.local/bin/sourceos-office-open"
 SOURCEOS_OFFICE_BIN="$HOME/.local/bin/sourceos-office"
 INSTALL_BIN="$HOME/.local/bin/install_sourceos_office_shell.sh"
 VERIFY_BIN="$HOME/.local/bin/office_shell_verify.sh"
+NEW_BIN="$HOME/.local/bin/office_new.sh"
 CLOUD_BIN="$HOME/.local/bin/office_cloud_handoff.sh"
 MIME_FILE="$XDG_CONFIG_HOME/mimeapps.list"
 TEST_DOC="$TMPDIR/demo.txt"
+NEW_DOC="$TMPDIR/new-writer.fodt"
 echo "SourceOS office shell smoke" > "$TEST_DOC"
 
 [[ -f "$DESKTOP_FILE" ]] || {
@@ -44,6 +46,11 @@ echo "SourceOS office shell smoke" > "$TEST_DOC"
 
 [[ -x "$VERIFY_BIN" ]] || {
   echo "office shell installer smoke failed: missing office_shell_verify helper" >&2
+  exit 1
+}
+
+[[ -x "$NEW_BIN" ]] || {
+  echo "office shell installer smoke failed: missing office_new helper" >&2
   exit 1
 }
 
@@ -89,6 +96,39 @@ case "$SEARCH_OUT" in
     exit 1
     ;;
 esac
+
+NEW_OUT="$($SOURCEOS_OFFICE_BIN new writer "$NEW_DOC")"
+[[ "$NEW_OUT" == "$NEW_DOC" ]] || {
+  echo "office shell installer smoke failed: installed sourceos-office new path did not return created file" >&2
+  exit 1
+}
+[[ -f "$NEW_DOC" ]] || {
+  echo "office shell installer smoke failed: installed sourceos-office new path did not create file" >&2
+  exit 1
+}
+
+grep -q "SourceOS sovereign writer template placeholder" "$NEW_DOC" || {
+  echo "office shell installer smoke failed: created writer file does not contain template payload" >&2
+  exit 1
+}
+
+DEFAULT_NEW_OUT="$($SOURCEOS_OFFICE_BIN new writer)"
+case "$DEFAULT_NEW_OUT" in
+  "$HOME"/Documents/SourceOS/agent-output/*.fodt) ;;
+  *)
+    echo "office shell installer smoke failed: default new path did not use SourceOS agent-output" >&2
+    exit 1
+    ;;
+esac
+[[ -f "$DEFAULT_NEW_OUT" ]] || {
+  echo "office shell installer smoke failed: default new path did not create file" >&2
+  exit 1
+}
+
+grep -q "SourceOS sovereign writer template placeholder" "$DEFAULT_NEW_OUT" || {
+  echo "office shell installer smoke failed: default writer file does not contain template payload" >&2
+  exit 1
+}
 
 "$SOURCEOS_OFFICE_BIN" install >/dev/null
 
