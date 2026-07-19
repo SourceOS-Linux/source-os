@@ -1,319 +1,392 @@
-# World-Class SourceOS and Mac-on-Linux Parity Plan
+# World-Class SourceOS and Mac-on-Linux Gap Plan
 
-This document integrates the latest workstation-v0 gap analysis into one actionable plan.
+This document consolidates the current Mac-on-Linux / world-class SourceOS gap
+analysis into a single actionable specification and plan. It is a docs-only
+planning artifact. It does not claim full macOS parity or world-class OS
+readiness.
 
-It is deliberately conservative. SourceOS may claim progress toward a Mac-like GNOME workstation v0, but it must not claim full macOS parity or world-class OS readiness until the missing product, lifecycle, security, recovery, continuity, and evidence layers are real.
+---
 
-## Executive position
+## Tier definitions
 
-Current maturity estimate:
+Three tiers are distinguished throughout this document. Each has its own scope,
+acceptance bar, and repo ownership.
 
-| Target | Current estimate | Position |
-|---|---:|---|
-| Mac-like GNOME workstation v0 | 75-80% | Credible, validation-backed local workstation lane. |
-| macOS parity | 25-30% | Not close; major ecosystem, continuity, app, security, backup, and product gaps remain. |
-| world-class OS | 30-35% | Strong realization spine, but missing full lifecycle/product/runtime/security/recovery plane. |
+### Tier 1 — Mac-like GNOME workstation v0
 
-The immediate posture should be:
+**What it means:** A credible GNOME desktop that feels familiar to a macOS user
+through bounded keyboard shortcuts, appearance defaults, touchpad gestures,
+launcher behavior, and file navigation. No GNOME Shell fork. No proprietary
+assets. No claim of feature-for-feature macOS parity.
 
-- Say **Mac-like GNOME workstation v0** when discussing the landed workstation lane.
-- Say **not yet macOS parity** when discussing Apple-equivalent claims.
-- Say **not yet world-class OS** until SourceOS has install/update/recovery/backup/security/runtime/contracts/evidence across the full stack.
+**Acceptance bar:** The features in `docs/workstation/mac-on-linux-acceptance.md`
+reach `implemented` or `validation-backed` status and pass CI smoke checks.
 
-## Important correction
+**Current status:** In progress. Several features are `implemented` or
+`validation-backed`. Several items remain `planned`. See the acceptance matrix
+for detail.
 
-`SourceOS-Linux/sourceos-shell` already exists.
+### Tier 2 — macOS parity
 
-Therefore the next runtime move is not repo creation. The next runtime move is to populate and validate the PDF-first runtime lane already described by that repository:
+**What it means:** Matching a substantial portion of macOS UX, runtime, and
+platform behaviors — including continuity features, iCloud-equivalent storage,
+Handoff, AirDrop, signed/notarized application trust, accessibility parity,
+full localization, and native-feel developer toolchains.
 
-- `services/docd` for document derivation;
-- `services/pdf-secure` for signing and validation;
-- `apps/pdf-viewer-demo` for the viewer/demo surface;
-- `content/` for draft, derived, and report layout;
-- workspace/bootstrap files, Makefile, and smoke validation;
-- contract links back to `SourceOS-Linux/sourceos-spec`;
-- Linux realization links back to `SourceOS-Linux/source-os`.
+**Current status:** Not attempted. Full macOS parity is a **non-goal** for
+workstation-v0 and for the current SourceOS roadmap. This document does not
+claim or target macOS parity.
+
+### Tier 3 — world-class OS
+
+**What it means:** An OS that competes on the following dimensions: runtime
+integrity and verified boot, hardware lifecycle and firmware management, complete
+backup and recovery, cryptographic identity and trust envelope, cross-device
+continuity equivalents, accessible and fully localized UI, a stable and audited
+contract canon for agents and host interfaces, evidence and reporting pipelines,
+and a viable developer/user ecosystem.
+
+**Current status:** Not achieved. Design gaps are documented below. This
+document does not claim world-class OS status.
+
+---
 
 ## What is already landed
 
-The workstation-v0 Mac-on-Linux lane now has real implementation or validation surfaces for:
+### `SociOS-Linux/source-os`
 
-| Area | Landed surface |
+| Area | Evidence |
 |---|---|
-| Launcher/action bus | `sourceos palette`, fuzzel/wofi/rofi/fzf fallback policy. |
-| Shell/fix/report helpers | `sourceos fix shell`, `fix fish`, `fix all`, report paths. |
-| Status/doctor | `sourceos status --json`, `doctor.sh --json`, aggregate polish warnings. |
-| Mac polish | screenshot helper, screenshot shortcuts, Quick Look/Sushi support, sidebar bookmarks, appearance defaults. |
-| Shortcut contract | `docs/workstation/shortcut-map.md`, `check-shortcut-map-contract.sh`, smoke workflow. |
-| Keyboard policy | `input-remapper` primary, `xremap` compatibility, Kinto explicit compatibility, `check-keyboard-policy.sh`. |
-| GNOME dock/extension validation | `check-gnome-dock-extension.sh`, smoke workflow. |
-| Aggregate validation | `check-workstation-polish.sh` now aggregates Mac polish, keyboard policy, shortcut map, and dock signals. |
-| Status integration | `sourceos status` consumes aggregate polish warnings without changing status JSON shape. |
-| Doctor integration | `doctor.sh` consumes aggregate polish signals as warning-oriented results without changing doctor JSON shape. |
-| Operator docs | `docs/workstation/RUNBOOK.md`, acceptance matrix, shortcut map. |
-| Contract alignment | `sourceos-spec` DesktopProfile now has optional Mac-on-Linux polish metadata. |
-| Agent instructions | `AGENTS.md` and `.github/copilot-instructions.md` encode issue-first, Copilot-primary delivery policy. |
+| GNOME appearance defaults | `profiles/linux-dev/workstation-v0/gnome/appearance-apply.sh` |
+| Mac-style keyboard shortcuts | `profiles/linux-dev/workstation-v0/gnome/mac-defaults.sh` |
+| Screenshot bindings | `profiles/linux-dev/workstation-v0/bin/mac-screenshot.sh` |
+| Launcher (SourceOS palette on `Super+Space`) | `profiles/linux-dev/workstation-v0/gnome/palette-hotkey.sh` |
+| Finder-like sidebar bookmarks | `profiles/linux-dev/workstation-v0/gnome/files-sidebar.sh` |
+| Touchpad gestures via Fusuma | `profiles/linux-dev/workstation-v0/gnome/fusuma-install.sh` |
+| `input-remapper` keyboard backend | `profiles/linux-dev/workstation-v0/gnome/input-install.sh` |
+| `xremap` compatibility lane | same as above |
+| Lampstand-backed local file search | `profiles/linux-dev/workstation-v0/bin/sourceos-search.sh` |
+| Aggregate polish validation | `profiles/linux-dev/workstation-v0/bin/check-workstation-polish.sh` |
+| `sourceos status` / `sourceos doctor` CLI | `profiles/linux-dev/workstation-v0/bin/sourceos` |
+| CI smoke workflows (keyboard, polish, Lampstand) | `.github/workflows/` |
 
-## What the design missed
+### `SourceOS-Linux/sourceos-spec`
 
-### 1. Shell runtime ownership was under-developed
+| Area | Notes |
+|---|---|
+| Contract canon drafts | Exists as the authoritative specification repository for SourceOS contracts. |
+| Agent Machine interface drafts | Tracked in sourceos-spec; not fully ratified. |
 
-We built Linux realization and validation faster than product runtime. The correct runtime home is `SourceOS-Linux/sourceos-shell`, and it already exists. The missing work is to populate the product/runtime repo with executable services, app shells, package scaffolds, and smoke validation.
+---
 
-### 2. macOS parity was framed too narrowly
+## What the design missed — gap catalogue
 
-Mac-like GNOME is not macOS parity. True parity would require equivalents for:
+The following areas have no or insufficient coverage in the current repositories.
+Each gap is assigned a tier and a priority (P1 = blocking for next milestone,
+P2 = important but not blocking, P3 = future).
 
-- Continuity/Handoff class workflows;
-- Universal Clipboard;
-- AirDrop-like local transfer;
-- phone/camera/device bridge surfaces;
-- Time Machine-class backup and restore;
-- FileVault/Keychain/Gatekeeper-class trust envelope;
-- Preview/PDF-quality document UX;
-- Messages/Notes/Photos-class application workflows or open equivalents;
-- accessibility and localization;
-- power, sleep, battery, thermal, and hardware integration;
-- app store/package and update trust model.
+### Shell runtime and lifecycle (P1 — Tier 3)
 
-### 3. Lifecycle and recovery are still not a product
+`SourceOS-Linux/sourceos-shell` **already exists** and is the designated repo
+for the PDF-first / document-first runtime lane. The next required move is
+**not** repo creation. It is:
 
-A world-class OS needs first-class:
+- Populating `sourceos-shell` with the PDF-first runtime primitives.
+- Aligning `sourceos-shell` with the `source-os` workstation profile and the
+  `sourceos-spec` contract canon.
+- Defining the handoff protocol between `sourceos-shell` and the `sourceos`
+  launcher in `source-os`.
 
-- install;
-- update;
-- rollback;
-- rescue;
-- backup;
-- restore;
-- snapshot retention;
-- user-readable recovery flows;
-- health validation before and after update.
+Gap: No content exists yet in `sourceos-shell` that demonstrates a working
+runtime lane. No alignment document exists between the three repos.
 
-The current workstation lane has install and validation helpers, but not a complete lifecycle product.
+### Backup and recovery (P1 — Tier 3)
 
-### 4. Security and trust envelope are incomplete
+Gap: No backup strategy, tooling, or runbook exists for the SourceOS workstation
+profile. A world-class OS requires:
 
-SourceOS needs an explicit trust model for:
+- Automated, verifiable backup of user data and system state.
+- Recovery runbook tested against at least one hardware target.
+- Integration with `sourceos doctor` to report backup health.
 
-- disk/profile encryption;
-- secret storage;
-- signed packages and provenance;
-- executable trust decisions;
-- revocation;
-- sandboxing;
-- permission prompts;
-- policy-bound host/agent mounts;
-- secure recovery and attestation.
+### Security and trust envelope (P1 — Tier 3)
 
-### 5. Contracts still trail implementation
+Gap: The current profile applies GNOME defaults and package installs without a
+defined trust model. Required work:
 
-`sourceos-spec` now represents DesktopProfile Mac-on-Linux polish metadata, but workstation doctor/fix reports still need canonical schemas:
+- Verified / measured boot integration plan (TPM, Secure Boot, image signing).
+- Application signing and attestation policy.
+- Audit of helper scripts for privilege escalation paths.
+- Key/credential lifecycle — generation, rotation, revocation.
 
-- `WorkstationDoctorReport`;
-- `WorkstationFixShellReport`;
-- `WorkstationFixFishReport`;
-- `WorkstationFixAllReport`.
+### Continuity equivalents (P2 — Tier 2 / 3)
 
-These are required before `agentplane`, `sociosphere`, `prophet-cli`, and `contractforge` can rely on stable evidence contracts.
+Gap: macOS Continuity (Handoff, AirDrop, Universal Clipboard, iPhone Mirroring)
+has no Linux-native equivalent in the profile. A world-class SourceOS could
+define bounded equivalents:
 
-### 6. Agent Machine contracts are central, not optional
+- Cross-device clipboard via a defined agent protocol.
+- File transfer via an open, auditable channel.
+- Notification bridging between workstation and mobile/tablet.
 
-A world-class agentic OS needs secure contracts for host, VM, container, repo, user, and agent planes. The Agent Machine and secure host interface work is not a side quest. It defines safe terminal/browser/editor/tool access, mount policies, evidence, and TopoLVM/local data semantics.
+### Contract canon and Agent Machine interface (P1 — Tier 3)
 
-### 7. The parity scorecard was missing
+Gap: `sourceos-spec` holds draft contracts but they are not ratified, versioned,
+or enforced by `source-os` or `sourceos-shell`. Required work:
 
-Without a formal scorecard, claims drift. We need maturity lanes for:
+- Publish a v0 contract schema for the Agent Machine / secure host interface.
+- Require `source-os` and `sourceos-shell` to validate against the schema in CI.
+- Define the lifecycle of a contract (proposal → draft → candidate → ratified).
 
-- visual parity;
-- interaction parity;
-- workflow parity;
-- developer parity;
-- security parity;
-- backup/recovery parity;
-- continuity parity;
-- accessibility/localization parity;
-- operational parity;
-- evidence/contract parity.
+### PDF and document runtime (P1 — Tier 3, `sourceos-shell` lane)
 
-## Parity scorecard
+Gap: The PDF-first / document-first runtime is a stated SourceOS differentiator
+but no implementation exists. `sourceos-shell` is the designated home.
+Required work:
 
-| Lane | Current maturity | Required to claim parity |
-|---|---:|---|
-| Visual GNOME polish | Medium | Dock behavior, theme/icon/font policy, window/app switching, consistent defaults. |
-| Interaction shortcuts | Medium | GUI/terminal/browser/editor parity fixtures, backend-specific acceptance tests. |
-| Launcher/search | Medium | Apps/files/web routing, richer provider routing, no redundant file search proof. |
-| File manager / preview | Medium | Quick Look/Sushi done; need richer file metadata, tagging, preview, open-with, search UX. |
-| PDF/document UX | Low | `sourceos-shell` PDF-first runtime: docd, pdf-secure, viewer/demo, reports. |
-| Backup/recovery | Low | Snapshot, retention, restore UX, disaster recovery, recovery media. |
-| Security/trust | Low | encryption, key/secret store, signed provenance, app sandbox/trust prompts. |
-| Continuity/device bridge | Very low | open equivalents for clipboard, transfer, camera, phone/device handoff. |
-| Accessibility/localization | Very low | keyboard/a11y matrix, screen reader checks, localization policy. |
-| OS lifecycle | Low | installer, update, rollback, promotion, channel policy, health gate. |
-| Contract/evidence | Medium | DesktopProfile aligned; doctor/fix contracts still missing. |
-| Agentic control plane | Low-medium | status/doctor outputs exist; agentplane/sociosphere/prophet-cli ingestion not done. |
+- Define what "PDF-first runtime" means operationally (open format, viewer,
+  annotation, signing, archival).
+- Implement a minimal working lane in `sourceos-shell`.
+- Document the handoff to `source-os` workstation profile.
 
-## Repository ownership boundaries
+### Application and runtime trust (P2 — Tier 3)
 
-| Repository | Owns | Does not own |
+Gap: No policy exists for what software may run on a SourceOS workstation, how
+it is verified, or how sandboxing is applied. Required work:
+
+- Flatpak / OSTree / Nix trust policy document.
+- Runtime integrity check integrated with `sourceos doctor`.
+- Capability-based permission model sketch for agent-invoked processes.
+
+### Accessibility and localization (P2 — Tier 2 / 3)
+
+Gap: No accessibility audit or localization plan exists. The profile applies
+GNOME defaults (which have reasonable a11y support) but does not test, document,
+or extend it. Required work:
+
+- GNOME a11y settings applied by `appearance-apply.sh` or a dedicated helper.
+- At least one locale other than `en_US` tested and documented.
+- WCAG audit note on any custom UI surfaces (launcher, palette).
+
+**Acceptance gate:**
+```bash
+test -s docs/workstation/accessibility.md
+```
+
+### Evidence and reporting (P2 — Tier 3)
+
+Gap: `sourceos doctor --json` and `sourceos status` emit signals, but there is
+no pipeline that aggregates evidence across all repos, surfaces a dashboard, or
+feeds a release gate. Required work:
+
+- Define the evidence schema for a SourceOS release gate.
+- Wire `source-os`, `sourceos-spec`, and `sourceos-shell` CI into a shared
+  evidence collection step.
+- Produce a human-readable maturity report on each milestone boundary.
+
+---
+
+## Parity scorecard — current state
+
+The following table uses the same status vocabulary as the acceptance matrix.
+
+| Domain | Tier 1 v0 | Tier 2 (parity) | Tier 3 (world-class) |
+|---|---|---|---|
+| GNOME appearance | validation-backed | not attempted | not attempted |
+| Keyboard shortcuts | validation-backed | partial (Kinto planned) | not attempted |
+| Touchpad gestures | implemented | partial | not attempted |
+| Launcher / palette | implemented | not attempted | not attempted |
+| Local file search | validation-backed | not attempted | not attempted |
+| Screenshot | validation-backed | not attempted | not attempted |
+| Status / doctor CLI | validation-backed | not attempted | not attempted |
+| Shell runtime lane | not started | not started | gap (see above) |
+| PDF / document runtime | not started | not started | gap (see above) |
+| Backup / recovery | not started | not started | gap (see above) |
+| Security / trust envelope | not started | not started | gap (see above) |
+| Continuity equivalents | not attempted | not attempted | gap (see above) |
+| Contract canon | draft only | draft only | gap (see above) |
+| Agent Machine interface | draft only | draft only | gap (see above) |
+| App / runtime trust | not started | not started | gap (see above) |
+| Accessibility | GNOME defaults only | not audited | gap (see above) |
+| Localization | not started | not started | gap (see above) |
+| Evidence / reporting | partial (CI only) | not started | gap (see above) |
+
+**Overall maturity rating: Tier 1 in progress. Tier 2 and Tier 3 not yet
+attempted. This is not a world-class OS claim.**
+
+---
+
+## Repo ownership boundaries
+
+| Repo | Owns | Does not own |
 |---|---|---|
-| `SourceOS-Linux/source-os` | Linux realization, workstation profile, GNOME helpers, installer, doctor/status, host/service wiring. | Product shell runtime, shared contract canon. |
-| `SourceOS-Linux/sourceos-spec` | JSON schemas, canonical examples, evidence contracts, workstation report contracts. | Linux implementation scripts or product runtime. |
-| `SourceOS-Linux/sourceos-shell` | Product/runtime shell, PDF-first document services, viewer/demo, router/docd/pdf-secure runtime. | Host profile realization or shared schema canon. |
-| `SocioProphet/agentplane` | Agent execution evidence, policy/control ingestion, run/replay artifacts. | Local workstation implementation. |
-| `SocioProphet/sociosphere` | Operator/workspace UI surfaces for workstation health/action reports. | OS host implementation. |
-| `SocioProphet/prophet-cli` | Remote/operator-facing wrappers for audit/fix flows. | SourceOS host profile internals. |
-| `SocioProphet/contractforge` | Typed contract generation and validation surfaces. | Runtime ownership. |
+| `SociOS-Linux/source-os` | Workstation profile realization; GNOME helpers; `sourceos` CLI; CI smoke workflows; workstation docs | Contract canon; shell runtime primitives; spec ratification |
+| `SourceOS-Linux/sourceos-spec` | Contract canon; schema definitions; Agent Machine interface spec; ratification lifecycle | Concrete realization scripts; CI for the workstation profile |
+| `SourceOS-Linux/sourceos-shell` | PDF-first / document-first runtime lane; shell runtime primitives; alignment with sourceos-spec contracts | GNOME-specific helpers; workstation package manifests |
+| SocioProphet agent / control-plane repos | Agent orchestration; secure host interface implementation; agent lifecycle | OS-level scripts; workstation profile; contract authorship |
 
-## Near-term execution plan
+### Alignment requirement
 
-### Phase A — Finish the workstation-v0 validation closure
+A gap exists today: the three primary repos (`source-os`, `sourceos-spec`,
+`sourceos-shell`) have no shared alignment document and no cross-repo CI
+enforcement of contracts. The next milestone must produce:
 
-1. Finish `mac-defaults.sh` validation helper and workflow.
-2. Reconcile umbrella tracker progress so stale checkboxes do not distort planning.
-3. Ensure acceptance matrix reflects the latest aggregate, status, doctor, shortcut, dock, and spec work.
+1. A tri-repo alignment note (can live in `sourceos-spec`).
+2. A contract validation step in `source-os` CI that imports a schema from
+   `sourceos-spec`.
+3. A `sourceos-shell` README that references the alignment and defines its
+   runtime lane scope.
 
-Acceptance gate:
+---
 
-- Fresh checkout has validation helpers for mac defaults, shortcut map, dock/extensions, Mac polish, keyboard policy, aggregate polish, status JSON shape, doctor JSON shape.
+## Execution plan — near-term work packets
 
-### Phase B — Populate `sourceos-shell` PDF-first runtime
+Work packets are listed in priority order. Each packet has an acceptance gate
+that defines done.
 
-Create or update a bounded issue in `SourceOS-Linux/sourceos-shell` for:
+### WP-1: `sourceos-shell` bootstrap and alignment (P1)
 
-- `services/docd` stub;
-- `services/pdf-secure` stub;
-- `apps/pdf-viewer-demo` stub;
-- content draft/derived/reports layout;
-- Makefile and smoke validation;
-- README boundary to `sourceos-spec` and `source-os`;
-- fixture document flow: draft markdown -> derived PDF/report placeholder.
+**Owner:** `SourceOS-Linux/sourceos-shell` primary + `SociOS-Linux/source-os`
+alignment change.
 
-Acceptance gate:
+**Work:**
+- Add a `README.md` to `sourceos-shell` that states the PDF-first runtime lane
+  scope and references `sourceos-spec` for the contract canon.
+- Add an alignment section to `sourceos-spec` that names all three repos and
+  their boundaries (as above).
+- Add a stub `docs/runtime-lane.md` to `sourceos-shell` with a minimal
+  definition of "PDF-first runtime" and the planned handoff to `source-os`.
 
-- `make validate` or equivalent passes.
-- Each service/app has a minimal smoke command.
-- README states repo boundary.
+**Acceptance gate:**
+```bash
+test -s README.md                        # in sourceos-shell
+test -s docs/runtime-lane.md            # in sourceos-shell
+grep -F "sourceos-shell" sourceos-spec/docs/alignment.md
+```
 
-### Phase C — Canonize workstation reports
+### WP-2: Contract canon v0 (P1)
 
-In `SourceOS-Linux/sourceos-spec`, finish schemas and examples for:
+**Owner:** `SourceOS-Linux/sourceos-spec`.
 
-- `WorkstationDoctorReport`;
-- `WorkstationFixShellReport`;
-- `WorkstationFixFishReport`;
-- `WorkstationFixAllReport`.
+**Work:**
+- Publish a `contracts/v0/agent-machine.json` (or YAML) schema.
+- Define the ratification lifecycle in `docs/contract-lifecycle.md`.
+- Add a CI step that lints the schema against its own meta-schema.
 
-Acceptance gate:
+**Acceptance gate:**
+```bash
+test -s contracts/v0/agent-machine.json  # in sourceos-spec
+test -s docs/contract-lifecycle.md       # in sourceos-spec
+# CI lint step passes
+```
 
-- examples validate;
-- current `source-os` report shapes can be mapped without breaking existing output.
+### WP-3: Doctor integration for aggregate polish (P1)
 
-### Phase D — OS lifecycle and recovery roadmap
+**Owner:** `SociOS-Linux/source-os` (tracked in issue #120).
 
-Add contracts and realization backlog for:
+**Work:**
+- Wire `check-workstation-polish.sh` output into `sourceos doctor --json`.
+- Ensure `sourceos doctor` exits non-zero when a required polish check fails.
 
-- install profile;
-- update profile;
-- rollback profile;
-- recovery profile;
-- snapshot/backup policy;
-- restore report;
-- health gates.
+**Acceptance gate:** `sourceos doctor --json` includes a `workstation_polish`
+key and the CI workflow for doctor passes.
 
-Acceptance gate:
+### WP-4: Backup and recovery runbook (P1)
 
-- at least one dev-host dry-run lifecycle path exists with evidence output.
+**Owner:** `SociOS-Linux/source-os`.
 
-### Phase E — Trust envelope roadmap
+**Work:**
+- Add `docs/workstation/backup-recovery.md` describing the backup strategy,
+  tooling choices, and recovery steps.
+- Add a validation helper `profiles/linux-dev/workstation-v0/bin/check-backup.sh`
+  that emits a warning when no backup target is configured.
 
-Define and implement first slices for:
+**Acceptance gate:**
+```bash
+test -s docs/workstation/backup-recovery.md
+bash -n profiles/linux-dev/workstation-v0/bin/check-backup.sh
+```
 
-- signed package/update metadata;
-- local provenance verification;
-- secret store boundary;
-- sandbox/app permission policy;
-- host/agent mount policy;
-- user-readable trust decisions.
+### WP-5: Security and trust envelope plan (P1)
 
-Acceptance gate:
+**Owner:** `SociOS-Linux/source-os` (doc) + `SourceOS-Linux/sourceos-spec`
+(trust model schema).
 
-- no privileged or host-mutating flow lacks a policy/evidence hook.
+**Work:**
+- Add `docs/workstation/security-trust.md` covering verified boot, app signing,
+  and credential lifecycle at the plan level.
+- Reference the trust model from `sourceos-spec`.
 
-### Phase F — Continuity-equivalent roadmap
+**Acceptance gate:**
+```bash
+test -s docs/workstation/security-trust.md
+grep -F "Secure Boot" docs/workstation/security-trust.md
+```
 
-Design open equivalents for:
+### WP-6: Dock and extension validation helper (P2)
 
-- universal clipboard;
-- local file transfer;
-- camera/phone bridge;
-- device handoff;
-- workspace sync;
-- network/hotspot handoff.
+**Owner:** `SociOS-Linux/source-os` (tracked in issue #130).
 
-Acceptance gate:
+**Work:** Implement `bin/check-dock-extensions.sh` and wire into the aggregate
+polish workflow.
 
-- documented security model and at least one local-first prototype lane.
+**Acceptance gate:** Workflow passes; helper exits 0 on a correctly configured
+GNOME session.
 
-## Work packet backlog
+### WP-7: Shortcut map contract (P2)
 
-Highest priority:
+**Owner:** `SociOS-Linux/source-os` (tracked in issue #126).
 
-1. `source-os`: finish `mac-defaults.sh` validation helper (#102).
-2. `sourceos-shell`: add PDF-first runtime scaffold and smoke validation.
-3. `sourceos-spec`: add workstation doctor/fix report contracts (#49).
-4. `source-os`: reconcile #67 and #77 tracker progress with landed work.
-5. `sourceos-spec`: continue Agent Machine / secure host interface contracts (#76/#77/#78).
+**Work:** Publish `docs/workstation/shortcut-map-contract.md` and validate
+against current `mac-defaults.sh` bindings.
 
-Secondary priority:
+**Acceptance gate:**
+```bash
+test -s docs/workstation/shortcut-map-contract.md
+```
 
-6. `source-os`: dock behavior policy pack: size, hide, click action, magnification policy.
-7. `source-os`: xremap activation path and Kinto compatibility docs/tests.
-8. `source-os`: richer Fusuma gesture defaults and conflict handling.
-9. `source-os`: terminal/editor/browser shortcut acceptance fixtures.
-10. `source-os`: theme/icon/font package policy and validation.
+### WP-8: Accessibility baseline (P2)
 
-Strategic priority:
+**Owner:** `SociOS-Linux/source-os`.
 
-11. backup/recovery contract and prototype;
-12. security/trust envelope contract and prototype;
-13. continuity-equivalent architecture;
-14. agentplane/sociosphere/prophet-cli ingestion of workstation health reports;
-15. sourceos-shell document/PDF UI beyond stubs.
+**Work:** Add an a11y settings block to `appearance-apply.sh` (high-contrast
+toggle, screen reader note) and a `docs/workstation/accessibility.md` audit
+note.
 
-## Claim discipline
+**Acceptance gate:**
+```bash
+test -s docs/workstation/accessibility.md
+```
 
-Permitted claims now:
+### WP-9: Evidence and reporting schema (P2)
 
-- SourceOS has a growing Mac-like GNOME workstation-v0 realization.
-- The workstation lane is increasingly validation-backed.
-- SourceOS has repo boundaries for realization, contracts, and runtime.
+**Owner:** `SourceOS-Linux/sourceos-spec` (schema) + `SociOS-Linux/source-os`
+(CI wire-up).
 
-Not permitted yet:
+**Work:** Define an evidence schema and produce a milestone maturity report from
+CI outputs.
 
-- full macOS parity;
-- world-class OS readiness;
-- production-grade security envelope;
-- Time Machine/FileVault/Continuity/Gatekeeper equivalents;
-- mature application/runtime ecosystem;
-- complete sourceos-shell runtime.
+**Acceptance gate:** A `reports/milestone-N.json` artifact is produced by CI and
+passes schema validation.
 
-## Completion criteria for stronger claims
+---
 
-To claim Mac-like GNOME workstation v0:
+## Non-goals preserved
 
-- all current workstation helper workflows pass;
-- fresh-install runbook is validated on a clean GNOME host;
-- shortcut/launcher/screenshot/search/preview/status/doctor paths are demoed and documented.
+- No full macOS UI clone.
+- No GNOME Shell fork or libadwaita replacement.
+- No proprietary asset dependency.
+- No production readiness claim from this document.
+- No claim of full macOS parity.
+- No world-class OS claim until Tier 3 gaps are closed and evidence exists.
 
-To claim macOS-adjacent workstation:
+---
 
-- add backup/recovery, trust envelope, richer shortcuts, app/file workflow polish, and continuity-equivalent prototypes.
+## Validation
 
-To claim world-class SourceOS:
-
-- complete lifecycle, recovery, security, runtime, contracts, device/hardware integration, accessibility/localization, backup/sync, and agentic evidence integration.
-
-## Immediate next action
-
-Finish #102 before opening broader product work. It is the last narrow validation gap in the GNOME defaults pack and should be handled before we move the center of gravity to `sourceos-shell`.
+```bash
+test -s docs/workstation/world-class-sourceos-parity-plan.md
+grep -F "sourceos-shell already exists" docs/workstation/world-class-sourceos-parity-plan.md
+grep -F "Mac-like GNOME workstation v0" docs/workstation/world-class-sourceos-parity-plan.md
+grep -F "world-class OS" docs/workstation/world-class-sourceos-parity-plan.md
+```
