@@ -1,54 +1,70 @@
-Use the GitHub issue body as the complete source of truth.
+# Copilot coding-agent instructions — source-os
 
-Copilot is the primary executor for bounded issue-first PR work in this repository. The issue body must contain the full task, acceptance criteria, validation commands, and non-goals before assignment. Do not rely on later comments as required context.
+## Guiding principle
 
-Before editing:
+Use the GitHub issue body as the source of truth for every task.
+Do not infer scope beyond what the issue explicitly states.
 
-1. Read the issue body.
-2. Inspect the repository.
-3. Identify existing validation commands.
-4. Keep the PR bounded to the issue scope.
+## Workflow rules
 
-When implementing:
+1. **Issue-first.** Every change must trace back to an open GitHub issue in this
+   repository. Do not open PRs without a corresponding issue.
+2. **Bounded PRs.** One PR addresses one issue. Do not bundle unrelated fixes,
+   refactors, or improvements into the same PR.
+3. **Validation evidence required.** Every PR body must include the exact
+   commands that were run, their pass/fail output, and any known gaps.
+4. **No unrelated changes.** Do not modify files that are not directly required
+   to satisfy the acceptance criteria in the issue.
 
-- Prefer existing repository patterns.
-- Add tests, fixtures, validators, or documentation with the implementation when appropriate.
-- Keep generated files only if repository conventions require them.
-- Do not modify unrelated workflows or policy files.
-- Do not touch unrelated repositories.
-- Do not broaden scope without asking in the issue.
-- Do not claim production readiness unless the issue explicitly requests and acceptance criteria prove it.
-- Open one PR against the default branch unless the issue explicitly says otherwise.
+## High-risk paths — mandatory human review before merge
 
-When opening the PR:
+Changes touching any of the following paths require an explicit maintainer
+review and approval before merging:
 
-- Link the issue.
-- Include what changed.
-- Include exact validation commands run.
-- Include pass/fail output summary.
-- List known gaps.
-- State non-goals preserved.
-- State anything blocked.
-- Do not mark ready if validation did not run.
+| Path / pattern | Risk category |
+|---|---|
+| `hosts/` | Host-role mutation |
+| `images/` | Image build definitions |
+| `profiles/` | NixOS profile definitions |
+| `modules/` | Shared NixOS modules |
+| `builders/` | Builder configuration |
+| `flake.nix`, `flake.lock` | Flake root / dependency lock |
+| `scripts/install*`, `scripts/enable*` | Install / provisioning scripts |
+| `*.service`, `*.timer`, `*.preset` | systemd units |
+| `ebpf/` | eBPF programs (kernel boundary) |
+| `runtime/` | Runtime admission and cap-checker |
+| `.github/workflows/` | CI/CD workflows |
+| `configs/` | Host and channel configuration |
+| `channels/` | Channel promotion config |
 
-Delivery evidence:
+## SourceOS-specific boundaries
 
-- A PR, branch, commit, or merge must exist in GitHub to count as delivery.
-- Comments, local task summaries, and draft notes are not delivery artifacts by themselves.
-- If blocked from creating a PR, report the blocker clearly on the issue.
+- **Boot / install / recovery paths** (`hosts/`, `images/`, scripts that write
+  to `/etc/` or `/boot/`): changes must be syntax-checked and smoke-tested
+  before the PR is opened. Claim no production readiness unless a full
+  integration test has been run.
+- **Host mutation** (`profiles/`, `modules/`): Nix expressions must evaluate
+  cleanly (`nix flake check` or equivalent) before merging.
+- **Workflows** (`.github/workflows/`): only modify if strictly required to
+  validate the work in scope. Document the reason in the PR body.
+- **Runtime admission** (`runtime/`, `ebpf/`): capability and policy changes
+  must include a quorum/anchor smoke test result.
 
-SourceOS-specific boundaries:
+## PR body template
 
-- Be conservative around boot, install, recovery, host mutation, release automation, and runtime admission.
-- Do not change privileged workflows unless the issue explicitly asks for workflow work.
-- Do not add secrets, credentials, private keys, tokens, or signing material.
-- Keep Mac-on-Linux workstation work bounded to documented GNOME defaults, helper scripts, validation helpers, package declarations, and docs unless the issue explicitly requests deeper changes.
-- Distinguish active behavior from future or proposed parity claims.
-- Preserve existing JSON contracts unless the issue explicitly requests a schema change.
+```
+## What changed
+<!-- Short description of the change -->
 
-Validation expectations:
+## Commands run
+<!-- Exact commands, in order -->
 
-- Run repo-native validation when available.
-- For shell scripts, run `bash -n` and any existing smoke workflows/tests relevant to the changed path.
-- For JSON examples or schemas, run `python3 -m json.tool` or repo-native schema validation.
-- If a validation command cannot run, explain why and include the error.
+## Output summary
+<!-- pass / fail, truncated where long -->
+
+## Known gaps
+<!-- Anything incomplete, untested, or deferred -->
+
+## Blocked on
+<!-- External dependencies or decisions needed -->
+```

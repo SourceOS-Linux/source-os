@@ -1,73 +1,83 @@
-# Agent Operating Instructions
+# AGENTS — source-os operating instructions
 
-Work issue-first.
+## Cardinal rule
 
-## Dispatch policy
+One repo, one issue, one PR.
 
-Copilot is the primary executor for bounded issue-first PR work in this repository.
+Every automated or assisted change in this repository must be backed by a
+single open GitHub issue and delivered in a single, focused pull request.
 
-Use Codex as a reviewer, cross-repo analyst, or backup implementation agent when Copilot is unavailable or when cross-repo reasoning is needed. Do not count Codex comments as delivery unless GitHub shows a PR, branch, commit, or merge.
+## Scope rules
 
-Delivery means one of the following exists in GitHub:
+- **Issue-first.** Do not start work without an open issue that explicitly
+  describes the acceptance criteria.
+- **Bounded scope.** Implement only what the issue acceptance criteria require.
+  Do not add improvements, refactors, or housekeeping unless the issue asks
+  for them.
+- **No cross-repo side-effects.** Changes must stay inside this repository.
+  Do not open PRs or push commits to other repositories as a side effect.
 
-- PR;
-- branch;
-- commit;
-- merge.
+## Validation evidence
 
-Agent comments, summaries, and local-task reports are engagement signals only.
+Every PR body must contain:
 
-## Rules
+1. The exact commands run (copy-paste, not paraphrased).
+2. Pass/fail output for each command (truncate long output but preserve the
+   result line).
+3. Known gaps — anything not tested, deferred, or out of scope.
+4. Blocked items — external decisions or dependencies needed before the work
+   can be completed.
 
-- One repo, one issue, one PR.
-- Inspect the live repository before editing.
-- Use the GitHub issue body as the source of truth.
-- Put the full task, acceptance criteria, validation commands, and non-goals in the issue body before assignment.
-- Keep scope bounded to the issue body.
-- Do not broaden scope without asking in the issue.
-- Do not touch unrelated files.
-- Prefer existing repo patterns and validation commands.
-- Add tests, fixtures, validators, or docs with implementation changes when appropriate.
-- Do not claim production readiness unless acceptance criteria prove it.
-- Include validation evidence in the PR body.
-- Leave known gaps explicit.
+## High-risk path rules
 
-PR body must include:
+The following paths carry elevated risk. Changes here require explicit
+maintainer approval before merge and must include validation evidence:
 
-- What changed.
-- Exact commands run.
-- Pass/fail output summary.
-- Known gaps.
-- Anything blocked.
+- `hosts/` — machine-role definitions (host mutation risk)
+- `images/` — image build definitions
+- `profiles/` — NixOS profiles
+- `modules/` — shared NixOS modules
+- `builders/` — builder configuration
+- `flake.nix`, `flake.lock` — flake root and dependency lock
+- `scripts/install*`, `scripts/enable*` — install / provisioning
+- `*.service`, `*.timer`, `*.preset` — systemd units
+- `ebpf/` — eBPF / kernel boundary
+- `runtime/` — runtime admission and capability checker
+- `.github/workflows/` — CI/CD pipelines
+- `configs/`, `channels/` — host and channel configuration
 
-Never:
+### Boot / install / recovery
 
-- Commit secrets, tokens, credentials, or private keys.
-- Invent release URLs, checksums, SBOMs, or provenance.
-- Claim live ingestion when only fixture validation exists.
-- Claim production or safety-critical authority from advisory data.
-- Modify workflows, boot/install/recovery, host mutation, runtime admission, or release automation unless the issue explicitly requests that scope.
+Scripts and configs that write to `/etc/` or `/boot/`, or that are invoked
+during OS installation or recovery, must be:
 
-High-risk paths require explicit review and narrow scope:
+- syntax-checked (`bash -n` or `shellcheck`) before the PR is opened;
+- smoke-tested in a non-production environment;
+- documented with pass/fail evidence in the PR body.
 
-- `.github/workflows/**` when privileged.
-- boot, install, recovery, host mutation, and release paths.
-- secrets, tokens, credentials, and signing material.
-- runtime admission, policy enforcement, production infrastructure, and deployment automation.
-- defense, public-safety, or effects-linked execution.
+Do not claim production readiness unless a full integration test result is
+included.
 
-For high-risk work, prefer this progression:
+### Host mutation
 
-1. docs/spec first;
-2. fixtures second;
-3. tests third;
-4. dry-run fourth;
-5. real mutation only behind explicit review.
+Nix expressions (`profiles/`, `modules/`, `flake.nix`) must evaluate cleanly
+(`nix flake check` or equivalent) before the PR is opened.
 
-Repository-specific notes:
+### Workflows
 
-- `SourceOS-Linux/source-os` is a Linux realization repository for SourceOS/SociOS work.
-- Workstation changes should preserve bounded GNOME defaults and avoid fragile shell replacement.
-- Mac-on-Linux work must distinguish implemented behavior from proposed/future parity.
-- Validation helpers should emit simple, parseable output where possible.
-- Keep implementation authority clear: contracts/specs belong in `SourceOS-Linux/sourceos-spec`; concrete Linux realization belongs here.
+Do not modify `.github/workflows/` unless the issue explicitly requires it.
+If a workflow change is required, state the reason in the PR body.
+
+### Runtime admission
+
+Changes to `runtime/` or `ebpf/` must include a quorum/anchor smoke-test
+result demonstrating that capability checks and policy enforcement still pass.
+
+## Non-goals
+
+The following are explicitly out of scope for agents operating in this repo:
+
+- Modifying workstation implementation files beyond what the issue requires.
+- Changing package manifests unless the issue requires it.
+- Claiming production readiness without full integration evidence.
+- Touching other repositories.
