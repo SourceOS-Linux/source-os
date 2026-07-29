@@ -217,7 +217,17 @@ in
           echo "sourceos-health-check: UNHEALTHY" >&2
           ${lib.optionalString cfg.healthCheck.rollbackOnFailure ''
             echo "sourceos-health-check: triggering rollback" >&2
-            ${bootPkg}/bin/sourceos-boot rollback execute --execute || true
+            # NO `|| true`. This is the last line of defence — it runs precisely when the
+            # host is ALREADY unhealthy — so a rollback that cannot run must be loud.
+            # Swallowing it converted "the machine did not recover" into "the machine
+            # reported that it recovered": the subcommand was dropped from sourceos-boot by
+            # PR #48 and this call became argparse exit 2, invisible behind the `|| true`,
+            # surviving only on the flake.lock pin to bc6dd8c. Restored by sourceos-boot #50.
+            if ! ${bootPkg}/bin/sourceos-boot rollback execute --execute; then
+              echo "sourceos-health-check: ROLLBACK FAILED (exit $?) — host is unhealthy AND did not roll back; manual intervention required" >&2
+              exit 3
+            fi
+            echo "sourceos-health-check: rollback completed" >&2
           ''}
           exit 2
         '';
