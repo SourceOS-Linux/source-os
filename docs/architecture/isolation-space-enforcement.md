@@ -28,8 +28,10 @@ The org boundary follows the ring: `kernel`/`system` = SourceOS base-OS territor
 ## Taint ⇄ toleration → Linux mechanism
 
 - A **toleration** is realized as a capability grant + an eBPF/LSM policy entry
-  for the operation's cgroup. No matching entry ⇒ the syscall is denied
-  (fail-closed), not merely logged.
+  for the operation's cgroup. For a space carrying a **blocking** taint
+  (`NoEntry`/`NoExecute`), no matching toleration ⇒ the syscall is denied
+  (fail-closed), not merely logged. A `PreferNoEntry` taint is **non-blocking**
+  (see below): it is allowed without a toleration and only recorded.
 - **NoEntry**: absent toleration ⇒ blocked by `CapabilityBoundingSet` / LSM.
 - **NoExecute**: toleration withdrawal rewrites the eBPF map ⇒ existing flows in
   that `data-namespace` are severed.
