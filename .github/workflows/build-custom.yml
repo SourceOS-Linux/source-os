@@ -75,6 +75,24 @@ jobs:
             bash scripts/build-custom-image.sh
           echo "artifact=$(cat out/artifact-url.txt)" >> "$GITHUB_OUTPUT"
 
+      # SP-GATE-002: the previously-orphaned verifier is now a GATE. When a signing
+      # key is configured, every produced image MUST verify against its public key +
+      # in-toto subject digest, or the build fails. (Unsigned dev builds — no pubkey
+      # configured — skip this; the signer still records attestation.signed=false.)
+      - name: Verify image signature + attestation
+        if: ${{ vars.SOURCEOS_SIGN_PUBKEY != '' }}
+        env:
+          SOURCEOS_SIGN_PUBKEY: ${{ vars.SOURCEOS_SIGN_PUBKEY }}
+        run: |
+          shopt -s nullglob
+          imgs=(out/*.iso out/kernel out/initrd)
+          [ ${#imgs[@]} -gt 0 ] || { echo "SP-GATE-002: a signing key is configured but no image artifacts to verify in out/" >&2; exit 1; }
+          for f in "${imgs[@]}"; do
+            [ -f "$f" ] || continue
+            echo "SP-GATE-002: verifying $(basename "$f")"
+            bash scripts/verify-image.sh "$f" "$SOURCEOS_SIGN_PUBKEY"
+          done
+
       - name: Mark done
         if: success()
         run: |

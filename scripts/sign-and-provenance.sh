@@ -13,9 +13,17 @@
 # yourself with `minisign -W` (see docs/SIGNING_SETUP.md). Verification is
 # anyone-can-check with the public key.
 #
-# Graceful by design: with no SOURCEOS_SIGN_SECRET_KEY the artifact is left
-# unsigned but provenance is still emitted (signatureRef omitted). This script
-# never fails the build — it always exits 0.
+# Attestation state is ALWAYS explicit: the OSImage provenance carries
+# `attestation.signed` (true/false) + a reason, so a consumer never has to infer
+# "unsigned" from a missing signatureRef (SP-GATE-002 / SP-GATE-003).
+#
+# Fail-closed, not fail-open:
+#   * no SOURCEOS_SIGN_SECRET_KEY           → unsigned, attestation.signed=false, exit 0
+#                                             (graceful for local/dev builds)
+#   * key present but signing produced none → EXIT NON-ZERO (a key was there and we
+#                                             failed to sign — refusing to emit
+#                                             unsigned-but-attested provenance)
+#   * SOURCEOS_REQUIRE_SIGNATURE=1 + unsigned → EXIT NON-ZERO (release contexts mandate it)
 #
 # Env:
 #   OUT                       output dir holding the artifact(s)        (required)
@@ -174,8 +182,14 @@ if [[ "$TARGET" == "iso" ]]; then
   SIG_REF=""
   [[ "$SIGNED" -eq 1 ]] && SIG_REF="$(ref_for "${PRIMARY_BASE}.minisig")"
   OSIMAGE_FILE="$OUT/${PRIMARY_BASE}.osimage.json"
+  # Explicit attestation state — a consumer reads attestation.signed, never infers
+  # it from a missing signatureRef. (Feeds the downstream epistemicLevel, SP-GATE-003.)
+  if [[ "$SIGNED" -eq 1 ]]; then SIGNED_BOOL=true; SIGN_REASON="minisign";
+  elif [[ -n "${SOURCEOS_SIGN_SECRET_KEY:-}" ]]; then SIGNED_BOOL=false; SIGN_REASON="signing-failed";
+  else SIGNED_BOOL=false; SIGN_REASON="no-signing-key"; fi
   prov="$(jq -n --arg s "$STATEMENT_URN" --arg p "$SLSA_URN" --arg sb "$SBOM_REF" --arg sg "$SIG_REF" \
-     '{statementRef:$s, slsaPredicateRef:$p}
+     --argjson signed "$SIGNED_BOOL" --arg reason "$SIGN_REASON" \
+     '{statementRef:$s, slsaPredicateRef:$p, attestation:{signed:$signed, reason:$reason}}
         + (if $sb != "" then {sbomRef:$sb} else {} end)
         + (if $sg != "" then {signatureRef:$sg} else {} end)')"
   jq -n \
@@ -219,4 +233,19 @@ if [[ "$TARGET" == "iso" ]]; then
 fi
 
 log "provenance complete (signed=$SIGNED) for $PRIMARY_BASE"
+
+# ── Fail-closed gate (SP-GATE-002) ─────────────────────────────────────────────
+# The old behaviour ("never fails — always exit 0") let an unsigned artifact ship
+# provenance that a downstream consumer could mistake for attested. Refuse that:
+if [[ "$SIGNED" -ne 1 ]]; then
+  if [[ -n "${SOURCEOS_SIGN_SECRET_KEY:-}" ]]; then
+    log "FAIL-CLOSED: a signing key was provided but no artifact was signed (minisign failed)"
+    exit 4
+  fi
+  if [[ "${SOURCEOS_REQUIRE_SIGNATURE:-0}" = "1" ]]; then
+    log "FAIL-CLOSED: SOURCEOS_REQUIRE_SIGNATURE=1 but the artifact is unsigned"
+    exit 4
+  fi
+  log "unsigned by design (no key, not required) — attestation.signed=false is explicit in the provenance"
+fi
 exit 0
