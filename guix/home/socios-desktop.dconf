@@ -1,0 +1,46 @@
+# SociOS desktop defaults — apply with:  dconf load / < guix/home/socios-desktop.dconf
+# (or via a Guix Home home-dconf activation). Sets the reference look/feel: left
+# window buttons, the standing-stones wallpaper, night-light, the Tilix quake
+# drop-down keybind, and the ArcMenu tognee layout + custom theme (the ArcMenu
+# keys take effect once the extension is packaged — see DESKTOP_COMPONENTS.md).
+
+[org/gnome/desktop/wm/preferences]
+button-layout='close,minimize,maximize:'
+
+# These paths are provided by the `socios-wallpapers` package (the standing-stones
+# + Matrix set) — a 🔷 owned-shell packaging item in DESKTOP_COMPONENTS.md. Until
+# it is in the system profile the URIs resolve to nothing (GNOME falls back to the
+# default background); the package MUST land for the reference look to apply.
+[org/gnome/desktop/background]
+picture-uri='file:///run/current-system/profile/share/backgrounds/socios/standing-stones-sunset.jpg'
+picture-uri-dark='file:///run/current-system/profile/share/backgrounds/socios/standing-stones-matrix.jpg'
+picture-options='zoom'
+
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+enable-hot-corners=true
+
+[org/gnome/settings-daemon/plugins/color]
+night-light-enabled=true
+night-light-temperature=uint32 3700
+
+# Tilix quake drop-down terminal, bound to F12
+[org/gnome/settings-daemon/plugins/media-keys]
+custom-keybindings=['/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/tilix-quake/']
+
+[org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/tilix-quake]
+name='Tilix Quake'
+command='tilix --quake'
+binding='F12'
+
+[com/gexperts/Tilix]
+window-style='disable-csd-hide-toolbar'
+quake-hide-lose-focus=true
+quake-height-percent=uint32 50
+
+# The menu (tognee-style), dock, system monitors, web-search, and consent/receipts
+# UX are NOT third-party gnome-look extensions — they are the FIRST-CLASS owned
+# SociOS shell (`sourceos-shell`), version-locked and coherent. So there is no
+# `enabled-extensions` graveyard here; the SociOS shell is a single owned layer.
+# Its settings live in the SociOS shell's own schema, not org.gnome.shell.extensions.*.
+# This keyfile sets only the native GNOME keys that survive every release.

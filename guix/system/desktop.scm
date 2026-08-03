@@ -16,10 +16,10 @@
 ;;; be build-validated — a wrong gdm-configuration would silently break the test).
 
 (use-modules (gnu)
+             (gnu packages)            ; specification->package (resolve by name)
              (nongnu packages linux)
              (nongnu system linux-initrd))
-(use-service-modules desktop ssh)
-(use-package-modules certs ssh)
+(use-service-modules desktop ssh docker)
 
 (define %keyboard-layout (keyboard-layout "us"))
 
@@ -54,14 +54,32 @@
                 (name "sourceos")
                 (comment "SourceOS operator")
                 (group "users")
-                (supplementary-groups '("wheel" "netdev" "audio" "video")))
+                ;; `docker` group so the SociOS desktop's container workflow works.
+                (supplementary-groups '("wheel" "netdev" "audio" "video" "docker")))
                %base-user-accounts))
 
-  (packages (append (list nss-certs) %base-packages))
+  ;; The SociOS default desktop set (resolved by NAME so a missing package fails
+  ;; cleanly on the runner). The menu / dock / monitors / web-search / consent UX
+  ;; are the FIRST-CLASS owned SociOS shell (`sourceos-shell`), version-locked and
+  ;; coherent — NOT third-party gnome-look extensions (see DESKTOP_COMPONENTS.md,
+  ;; the 🔷 owned-shell build queue). So no ArcMenu/Vitals/dash-to-dock/plank here.
+  (packages (append (map specification->package
+                         ;; No "openssh" here — the ssh service already pulls
+                         ;; openssh-sans-x; installing full "openssh" too would
+                         ;; duplicate the closure with a different variant.
+                         '("nss-certs"
+                           "tilix"                 ; quake drop-down terminal
+                           "gnome-tweaks"          ; native settings only
+                           "icecat" "libreoffice" "gimp"
+                           "redshift" "font-dejavu" "font-gnu-freefont"))
+                    %base-packages))
 
   ;; Full GNOME on top of the desktop stack (%desktop-services provides gdm +
-  ;; NetworkManager); openssh for headless control from the harness.
+  ;; NetworkManager); Docker for the container workflow; openssh for headless
+  ;; control from the Agent-S harness.
   (services (cons* (service gnome-desktop-service-type)
+                   (service docker-service-type)
                    (service openssh-service-type
-                            (openssh-configuration (openssh openssh-sans-x)))
+                            (openssh-configuration
+                             (openssh (specification->package "openssh-sans-x"))))
                    %desktop-services)))
