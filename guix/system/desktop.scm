@@ -16,10 +16,10 @@
 ;;; be build-validated — a wrong gdm-configuration would silently break the test).
 
 (use-modules (gnu)
+             (gnu packages)            ; specification->package (resolve by name)
              (nongnu packages linux)
              (nongnu system linux-initrd))
-(use-service-modules desktop ssh)
-(use-package-modules certs ssh)
+(use-service-modules desktop ssh docker)
 
 (define %keyboard-layout (keyboard-layout "us"))
 
@@ -54,14 +54,32 @@
                 (name "sourceos")
                 (comment "SourceOS operator")
                 (group "users")
-                (supplementary-groups '("wheel" "netdev" "audio" "video")))
+                ;; `docker` group so the SociOS desktop's container workflow works.
+                (supplementary-groups '("wheel" "netdev" "audio" "video" "docker")))
                %base-user-accounts))
 
-  (packages (append (list nss-certs) %base-packages))
+  ;; The SociOS default desktop set. Resolved by NAME at build time so a missing
+  ;; package fails cleanly on the runner (the Workstream-F packaging signal) —
+  ;; ArcMenu/tognee, Vitals, Places-indicator and the Matrix wallpaper are NOT yet
+  ;; in Guix and are tracked in DESKTOP_COMPONENTS.md (the 🟠 packaging queue).
+  (packages (append (map specification->package
+                         '("nss-certs" "openssh"
+                           ;; terminals: Tilix (quake drop-down) + the estate shells
+                           "tilix"
+                           ;; shell customization available in Guix today
+                           "gnome-tweaks" "gnome-shell-extensions"
+                           ;; browsers / office / graphics / media
+                           "icecat" "libreoffice" "gimp"
+                           ;; night-light + a docklike panel + fonts
+                           "redshift" "plank" "font-dejavu" "font-gnu-freefont"))
+                    %base-packages))
 
   ;; Full GNOME on top of the desktop stack (%desktop-services provides gdm +
-  ;; NetworkManager); openssh for headless control from the harness.
+  ;; NetworkManager); Docker for the container workflow; openssh for headless
+  ;; control from the Agent-S harness.
   (services (cons* (service gnome-desktop-service-type)
+                   (service docker-service-type)
                    (service openssh-service-type
-                            (openssh-configuration (openssh openssh-sans-x)))
+                            (openssh-configuration
+                             (openssh (specification->package "openssh-sans-x"))))
                    %desktop-services)))
