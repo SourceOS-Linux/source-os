@@ -1,0 +1,48 @@
+name: model-plane-receipts
+
+# Teeth for the Model Plane (Tranche 7) receipt emitter shim: proves source-os emits
+# spec-conformant, hash-chained InferenceReceipts and that tampered / local-only receipts
+# are rejected (SEAM-011). CI needs no model — the emitter path is what is under test.
+
+on:
+  pull_request:
+    paths:
+      - 'modules/model-plane/**'
+      - '.github/workflows/model-plane-receipts.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'modules/model-plane/**'
+      - '.github/workflows/model-plane-receipts.yml'
+
+jobs:
+  inferenced-receipt-teeth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install jsonschema
+        run: python -m pip install --quiet 'jsonschema>=4.22,<5'
+
+      - name: Assert emitter is vendored byte-verbatim (consume-not-fork)
+        run: |
+          set -euo pipefail
+          expected=6881246b8e41a515fb1b29df645faeb9be17d8195d22a7e0d5ce15f8477d8e6a
+          actual=$(sha256sum modules/model-plane/tools/inference_receipt_emitter.py | awk '{print $1}')
+          if [ "$actual" != "$expected" ]; then
+            echo "ERR: vendored emitter diverged from canonical (expected $expected, got $actual)."
+            echo "     Refresh from prophet-platform apps/receipt-gateway; do not fork (SEAM-011)."
+            exit 1
+          fi
+          echo "OK: emitter matches canonical sha256:$expected"
+
+      - name: inferenced emit-shim teeth
+        run: python modules/model-plane/inferenced_shim.py --selftest
+
+      - name: Canonical emitter self-test
+        run: python modules/model-plane/tools/inference_receipt_emitter.py --selftest
