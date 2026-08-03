@@ -1,0 +1,19 @@
+{
+  "name": "hellgraph",
+  "repo": "https://github.com/SocioProphet/hellgraph",
+  "reason": "Consumed vendored, not forked: hellgraph is the System Graph substrate netwatch ingests into and the B11/E11 surface feeds read. Not our lane to modify — pin a release and verify integrity.",
+  "pin": {
+    "tag": "v0.4.45",
+    "commit": "dbe854faf5b8f53a484fd164ba6f84328b5dd24b",
+    "tree": "4161b5f614691e1248a303137ea833a4f9bf97df",
+    "released_on_main": true
+  },
+  "integrity": {
+    "algo": "sha512",
+    "git_archive_tar": "5f892c91e892206fd9b266202c3a4960528211fd593c79e64ea7ffaf8cc9ab5f29ec73bb5c06c09fc26acc866f13bf3ac12375ac8ac7d76f64e6e5d406ff7421",
+    "note": "sha512 of `git archive --format=tar <commit>`; recompute with tools/verify_vendor.py --checkout"
+  },
+  "license": "MIT",
+  "consumers": ["turtle-netwatch System Graph ingest", "surface feeds", "sourceos-shell"],
+  "vendored_at": "2026-08-03"
+}
