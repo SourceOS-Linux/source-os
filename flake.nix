@@ -298,6 +298,8 @@
           mesh-runtime-contract = import ./tests/mesh-runtime-contract.nix { inherit pkgs; };
           mesh-package-contract = import ./tests/mesh-package-contract.nix { inherit pkgs; };
           mesh-host-runtime-contract = import ./tests/mesh-host-runtime-contract.nix { inherit pkgs; };
+
+          sovereign-vendor-contract = import ./tests/sovereign-vendor-contract.nix { inherit pkgs; };
           sourceos-shell-module-contract = import ./tests/sourceos-shell-module-contract.nix { inherit pkgs; };
           sourceos-shell-service-graph-contract = import ./tests/sourceos-shell-service-graph-contract.nix { inherit pkgs; };
           sourceos-shell-keyboard-equivalence-contract = import ./tests/sourceos-shell-keyboard-equivalence-contract.nix { inherit pkgs; };
