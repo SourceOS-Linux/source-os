@@ -58,20 +58,17 @@
                 (supplementary-groups '("wheel" "netdev" "audio" "video" "docker")))
                %base-user-accounts))
 
-  ;; The SociOS default desktop set. Resolved by NAME at build time so a missing
-  ;; package fails cleanly on the runner (the Workstream-F packaging signal) —
-  ;; ArcMenu/tognee, Vitals, Places-indicator and the Matrix wallpaper are NOT yet
-  ;; in Guix and are tracked in DESKTOP_COMPONENTS.md (the 🟠 packaging queue).
+  ;; The SociOS default desktop set (resolved by NAME so a missing package fails
+  ;; cleanly on the runner). The menu / dock / monitors / web-search / consent UX
+  ;; are the FIRST-CLASS owned SociOS shell (`sourceos-shell`), version-locked and
+  ;; coherent — NOT third-party gnome-look extensions (see DESKTOP_COMPONENTS.md,
+  ;; the 🔷 owned-shell build queue). So no ArcMenu/Vitals/dash-to-dock/plank here.
   (packages (append (map specification->package
                          '("nss-certs" "openssh"
-                           ;; terminals: Tilix (quake drop-down) + the estate shells
-                           "tilix"
-                           ;; shell customization available in Guix today
-                           "gnome-tweaks" "gnome-shell-extensions"
-                           ;; browsers / office / graphics / media
+                           "tilix"                 ; quake drop-down terminal
+                           "gnome-tweaks"          ; native settings only
                            "icecat" "libreoffice" "gimp"
-                           ;; night-light + a docklike panel + fonts
-                           "redshift" "plank" "font-dejavu" "font-gnu-freefont"))
+                           "redshift" "font-dejavu" "font-gnu-freefont"))
                     %base-packages))
 
   ;; Full GNOME on top of the desktop stack (%desktop-services provides gdm +

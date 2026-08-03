@@ -34,11 +34,9 @@ window-style='disable-csd-hide-toolbar'
 quake-hide-lose-focus=true
 quake-height-percent=uint32 50
 
-# ArcMenu — Windows-start menu with the tognee layout + custom color theme
-# (applies once gnome-shell-extension-arcmenu is in the Guix profile).
-[org/gnome/shell/extensions/arcmenu]
-menu-layout='Tognee'
-override-menu-theme=true
-
-[org/gnome/shell]
-enabled-extensions=['arcmenu@arcmenu.com', 'places-menu@gnome-shell-extensions.gcampax.github.com', 'Vitals@CoreCoding.com', 'dash-to-dock@micxgx.gmail.com', 'appindicatorsupport@rgcjonas.gmail.com']
+# The menu (tognee-style), dock, system monitors, web-search, and consent/receipts
+# UX are NOT third-party gnome-look extensions — they are the FIRST-CLASS owned
+# SociOS shell (`sourceos-shell`), version-locked and coherent. So there is no
+# `enabled-extensions` graveyard here; the SociOS shell is a single owned layer.
+# Its settings live in the SociOS shell's own schema, not org.gnome.shell.extensions.*.
+# This keyfile sets only the native GNOME keys that survive every release.
