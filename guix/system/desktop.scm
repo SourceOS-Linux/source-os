@@ -64,7 +64,10 @@
   ;; coherent — NOT third-party gnome-look extensions (see DESKTOP_COMPONENTS.md,
   ;; the 🔷 owned-shell build queue). So no ArcMenu/Vitals/dash-to-dock/plank here.
   (packages (append (map specification->package
-                         '("nss-certs" "openssh"
+                         ;; No "openssh" here — the ssh service already pulls
+                         ;; openssh-sans-x; installing full "openssh" too would
+                         ;; duplicate the closure with a different variant.
+                         '("nss-certs"
                            "tilix"                 ; quake drop-down terminal
                            "gnome-tweaks"          ; native settings only
                            "icecat" "libreoffice" "gimp"
