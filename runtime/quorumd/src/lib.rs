@@ -124,6 +124,89 @@ pub fn verify_quorum(proof: &QuorumProof, payload_hash: Option<&str>) -> QuorumO
     QuorumOutcome { ok: reasons.is_empty(), reasons }
 }
 
+// ── Cryptographic quorum: real validator signatures (Ed25519 / NitroKey / sovereign key) ────
+//
+// `verify_quorum` checks the SHAPE + threshold + that distinct listed validators supplied a
+// signature. `verify_quorum_signed` goes the last mile: each signature must be a valid Ed25519
+// signature by the validator's REGISTERED public key over the signed_payload_hash. An attacker
+// cannot forge a validator's vote without that validator's private key — "every validator keeps
+// its own truth" made real. Ed25519 is the NitroKey / OpenSSH / sovereign-key form; pure Rust,
+// no arch-specific code, so it verifies the same on aarch64 / x86_64 / riscv64. Keys are pinned
+// OUT OF BAND (Genesis enrollment) — a signature counts only if the signer is in BOTH the proof's
+// `validators` and the registered key set. (ES256/WebAuthn assertions are a follow-up.)
+
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+/// spiffe_id -> Ed25519 public key, hex-encoded (64 hex chars = 32 bytes).
+pub type ValidatorKeys = std::collections::BTreeMap<String, String>;
+
+fn ed25519_ok(pubkey_hex: &str, message: &[u8], sig_hex: &str) -> bool {
+    let pk = match hex::decode(pubkey_hex) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let pk: [u8; 32] = match pk.try_into() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let sig_bytes = match hex::decode(sig_hex) {
+        Ok(b) => b,
+        Err(_) => return false,
+    };
+    let vk = match VerifyingKey::from_bytes(&pk) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let sig = match Signature::from_slice(&sig_bytes) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    vk.verify(message, &sig).is_ok()
+}
+
+/// Cryptographic quorum verification: structural validity AND >= threshold DISTINCT signatures
+/// that each cryptographically verify (Ed25519) against the signer's registered key over the
+/// signed_payload_hash. Fail-closed: an unregistered signer or an invalid signature does not count.
+pub fn verify_quorum_signed(
+    proof: &QuorumProof,
+    payload_hash: Option<&str>,
+    keys: &ValidatorKeys,
+) -> QuorumOutcome {
+    // Start from the structural check (shape, rule, payload binding, distinct listed signers).
+    let mut reasons = verify_quorum(proof, payload_hash).reasons;
+
+    let (threshold, _total, kind) = match parse_rule(&proof.rule) {
+        Some(r) => r,
+        None => return QuorumOutcome { ok: false, reasons },
+    };
+    let vset: BTreeSet<&str> = proof.validators.iter().map(String::as_str).collect();
+    let message = proof.signed_payload_hash.as_bytes();
+
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut crypto_valid = 0usize;
+    for (i, s) in proof.signatures.iter().enumerate() {
+        if s.kind != kind || !vset.contains(s.spiffe_id.as_str()) || seen.contains(s.spiffe_id.as_str()) {
+            continue; // any structural reason is already recorded above
+        }
+        match keys.get(&s.spiffe_id) {
+            None => reasons.push(format!("signature[{i}] signer '{}' has no registered key", s.spiffe_id)),
+            Some(pubkey) => {
+                if ed25519_ok(pubkey, message, &s.sig) {
+                    seen.insert(s.spiffe_id.as_str());
+                    crypto_valid += 1;
+                } else {
+                    reasons.push(format!("signature[{i}] Ed25519 signature invalid for '{}'", s.spiffe_id));
+                }
+            }
+        }
+    }
+    if crypto_valid < threshold {
+        reasons.push(format!("{crypto_valid} cryptographically-valid signature(s) < threshold {threshold}"));
+    }
+
+    QuorumOutcome { ok: reasons.is_empty(), reasons }
+}
+
 pub fn aggregate(votes: &[Vote]) -> Option<String> {
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
     for vote in votes {
@@ -207,5 +290,75 @@ mod tests {
             QuorumSignature { kind: "machine".into(), spiffe_id: "spiffe://v/2".into(), sig: "x".repeat(20) },
         ]);
         assert!(!verify_quorum(&p, None).ok);
+    }
+
+    // ── cryptographic quorum (Ed25519) ─────────────────────────────────────────────────────
+    use ed25519_dalek::{Signer, SigningKey};
+
+    // deterministic key per validator (seed = validator index), so tests need no RNG.
+    fn keypair(seed: u8) -> (SigningKey, String) {
+        let sk = SigningKey::from_bytes(&[seed; 32]);
+        (sk.clone(), hex::encode(sk.verifying_key().to_bytes()))
+    }
+    fn real_sig(sk: &SigningKey, spiffe: &str, payload_hash: &str) -> QuorumSignature {
+        let sig = sk.sign(payload_hash.as_bytes());
+        QuorumSignature { kind: "human".into(), spiffe_id: spiffe.into(), sig: hex::encode(sig.to_bytes()) }
+    }
+
+    #[test]
+    fn valid_ed25519_quorum_passes() {
+        let (sk1, pk1) = keypair(1);
+        let (sk2, pk2) = keypair(2);
+        let (_sk3, pk3) = keypair(3);
+        let mut keys = ValidatorKeys::new();
+        keys.insert("spiffe://v/1".into(), pk1);
+        keys.insert("spiffe://v/2".into(), pk2);
+        keys.insert("spiffe://v/3".into(), pk3);
+        let p = proof(vec![real_sig(&sk1, "spiffe://v/1", PH), real_sig(&sk2, "spiffe://v/2", PH)]);
+        let o = verify_quorum_signed(&p, Some(PH), &keys);
+        assert!(o.ok, "{:?}", o.reasons);
+    }
+
+    #[test]
+    fn forged_signature_fails() {
+        let (sk1, pk1) = keypair(1);
+        let (_sk2, pk2) = keypair(2);
+        let mut keys = ValidatorKeys::new();
+        keys.insert("spiffe://v/1".into(), pk1);
+        keys.insert("spiffe://v/2".into(), pk2);
+        keys.insert("spiffe://v/3".into(), keypair(3).1);
+        // v2's signature is garbage (not signed by v2's key) — must not count.
+        let forged = QuorumSignature { kind: "human".into(), spiffe_id: "spiffe://v/2".into(), sig: "ab".repeat(32) };
+        let p = proof(vec![real_sig(&sk1, "spiffe://v/1", PH), forged]);
+        let o = verify_quorum_signed(&p, Some(PH), &keys);
+        assert!(!o.ok && o.reasons.iter().any(|r| r.contains("Ed25519 signature invalid")));
+    }
+
+    #[test]
+    fn signature_over_wrong_payload_fails() {
+        // v2 signs a DIFFERENT payload — valid signature, wrong message → does not verify.
+        let (sk1, pk1) = keypair(1);
+        let (sk2, pk2) = keypair(2);
+        let mut keys = ValidatorKeys::new();
+        keys.insert("spiffe://v/1".into(), pk1);
+        keys.insert("spiffe://v/2".into(), pk2);
+        keys.insert("spiffe://v/3".into(), keypair(3).1);
+        let other = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let p = proof(vec![real_sig(&sk1, "spiffe://v/1", PH), real_sig(&sk2, "spiffe://v/2", other)]);
+        let o = verify_quorum_signed(&p, Some(PH), &keys);
+        assert!(!o.ok);
+    }
+
+    #[test]
+    fn unregistered_signer_fails() {
+        let (sk1, pk1) = keypair(1);
+        let (sk2, _pk2) = keypair(2);
+        let mut keys = ValidatorKeys::new();
+        keys.insert("spiffe://v/1".into(), pk1);
+        // v2 has NO registered key.
+        keys.insert("spiffe://v/3".into(), keypair(3).1);
+        let p = proof(vec![real_sig(&sk1, "spiffe://v/1", PH), real_sig(&sk2, "spiffe://v/2", PH)]);
+        let o = verify_quorum_signed(&p, Some(PH), &keys);
+        assert!(!o.ok && o.reasons.iter().any(|r| r.contains("no registered key")));
     }
 }
