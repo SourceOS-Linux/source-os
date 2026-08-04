@@ -31,6 +31,12 @@
   };
 
   # ── sourceos-syncd ───────────────────────────────────────────────────────────
+  # ── HellGraph always-on graph service (local-only; p2p superpeer opt-in) ──────
+  sourceos.hellgraph = {
+    enable = true;
+    package = self.packages.x86_64-linux.hellgraph;
+  };
+
   sourceos.syncd = {
     enable = true;
     package = syncdPkg;
