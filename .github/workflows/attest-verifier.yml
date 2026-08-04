@@ -1,0 +1,51 @@
+name: attest-verifier
+
+# The L0 verifier core (boot attestation + validator quorum) is pure Rust and MUST run on any
+# silicon a device might be — an Apple-Silicon M2, an x86_64 or a RISC-V sovereign-silicon box.
+# This gate tests it natively on x86_64 and compile-checks it for aarch64 and riscv64, so the
+# "same binary logic, any silicon" claim is enforced, not asserted.
+on:
+  push:
+    paths:
+      - 'runtime/quorumd/**'
+      - 'runtime/watchdog-validator/**'
+      - '.github/workflows/attest-verifier.yml'
+  pull_request:
+    paths:
+      - 'runtime/quorumd/**'
+      - 'runtime/watchdog-validator/**'
+      - '.github/workflows/attest-verifier.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test-x86_64:
+    name: test (x86_64 sovereign-silicon)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: runtime
+    steps:
+      - uses: actions/checkout@v4
+      - name: Boot-attestation + quorum verifier tests
+        run: cargo test -p quorumd -p watchdog-validator
+
+  cross-silicon-check:
+    name: compile-check (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-unknown-linux-gnu, riscv64gc-unknown-linux-gnu]
+    defaults:
+      run:
+        working-directory: runtime
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+      # `cargo check` needs the target's std, not a cross-linker — enough to prove the pure-Rust
+      # verifier compiles for this silicon.
+      - name: Compile-check the verifier for ${{ matrix.target }}
+        run: cargo check -p quorumd -p watchdog-validator --target ${{ matrix.target }}
