@@ -16,6 +16,7 @@ Status legend: ☐ not started · ◐ spiked · ☑ parity proven on a Linux run
 | `lampstand` | `packages/search/lampstand.nix` | Guix package | ☐ |
 | `sourceos-syncd` | `packages/sourceos-syncd/default.nix` | Guix package | ☐ |
 | `sourceos-boot` | `packages/sourceos-boot/default.nix` | Guix package | ☐ |
+| `hellgraph` | `packages/hellgraph/default.nix` | `guix/packages/hellgraph.scm` — copy-build-system, wraps Node.js entrypoints | ◐ |
 
 ## 2. Images (`flake.nix`, via `nixos-generators`)
 | Nix image | Def | Guix equivalent (`guix system image -t …`) | Status |
@@ -32,6 +33,7 @@ Status legend: ☐ not started · ◐ spiked · ☑ parity proven on a Linux run
 | mesh | `modules/nixos/mesh` | `guix/services/mesh.scm` | ☐ |
 | sourceos-shell | `modules/nixos/sourceos-shell` | `guix/services/sourceos-shell.scm` | ☐ |
 | sourceos-syncd | `modules/nixos/sourceos-syncd` | `guix/services/sourceos-syncd.scm` | ☐ |
+| hellgraph | `modules/nixos/hellgraph` | `guix/services/hellgraph.scm` — shepherd service, superpeer opt-in, credential file | ◐ |
 
 ## 4. Checks / tests (`tests/`, `flake.nix` `checks`)
 The primary gate is Layer-1 deterministic boot; the contract/smoke suite asserts

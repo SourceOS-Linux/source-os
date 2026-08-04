@@ -23,13 +23,17 @@
       url = "github:SourceOS-Linux/sourceos-boot";
       flake = false;
     };
+    hellgraph-src = {
+      url = "github:SocioProphet/hellgraph";
+      flake = false;
+    };
     nixos-generators = {
       url = "github:nix-community/nixos-generators";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, nixos-apple-silicon, sops-nix, lampstand-src, sourceos-syncd-src, sourceos-boot-src, nixos-generators }:
+  outputs = { self, nixpkgs, nixos-apple-silicon, sops-nix, lampstand-src, sourceos-syncd-src, sourceos-boot-src, hellgraph-src, nixos-generators }:
     let
       lib = nixpkgs.lib;
       systems = [ "x86_64-linux" "aarch64-linux" ];
@@ -50,6 +54,7 @@
           sourceos-syncd = pkgs.callPackage ./packages/sourceos-syncd/default.nix {
             inherit sourceos-syncd-src;
           };
+          hellgraph = pkgs.callPackage ./packages/hellgraph/default.nix { inherit hellgraph-src; };
           sourceos-boot = pkgs.callPackage ./packages/sourceos-boot/default.nix {
             inherit sourceos-boot-src;
           };
@@ -152,6 +157,7 @@
 
       nixosModules = {
         sourceos-syncd = import ./modules/nixos/sourceos-syncd/default.nix;
+        hellgraph = import ./modules/nixos/hellgraph/default.nix;
         # Public edition profiles. The installer (scripts/install-image.sh
         # --edition) composes one of these with a freshly generated
         # hardware-configuration.nix on the target — no per-machine config is
@@ -197,6 +203,7 @@
           modules = [
             sops-nix.nixosModules.sops
             self.nixosModules.sourceos-syncd
+            self.nixosModules.hellgraph
             ./hosts/canary-x86_64/default.nix
           ];
         };

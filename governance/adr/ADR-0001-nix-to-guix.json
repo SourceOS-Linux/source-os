@@ -12,7 +12,20 @@
   "parity_doc": "guix/NIX_BASELINE.md",
   "status": "parity",
   "phases": ["spike", "parity", "cutover", "done"],
-  "waivers": [],
+  "waivers": [
+    {
+      "path": "packages/hellgraph/default.nix",
+      "reason": "hellgraph package: Guix equivalent guix/packages/hellgraph.scm authored in the same PR (#326); parity table updated in guix/NIX_BASELINE.md",
+      "guix_equivalent": "guix/packages/hellgraph.scm",
+      "pr": "326"
+    },
+    {
+      "path": "modules/nixos/hellgraph/default.nix",
+      "reason": "hellgraph NixOS service module: Guix shepherd service equivalent guix/services/hellgraph.scm authored in the same PR (#326); parity table updated in guix/NIX_BASELINE.md",
+      "guix_equivalent": "guix/services/hellgraph.scm",
+      "pr": "326"
+    }
+  ],
   "policy": {"new_from": "forbid", "new_from_reason": "no new Nix while the estate migrates to Guix; the gate blocks only newly-ADDED .nix, not maintenance of existing ones"},
   "gate": "scripts/adr_swap_gate.py (Firewall #1, CI-required); flip status to 'cutover' then 'done' to relax",
   "provenance": "source-os#314 (guix/channels.scm + guix/system/workstation.scm) + #315 (desktop.scm + guix/NIX_BASELINE.md), MERGED 2026-08-02. As of 2026-08-04: 63 .nix vs 3 .scm on main — parity phase."
