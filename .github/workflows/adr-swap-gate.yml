@@ -1,0 +1,27 @@
+name: adr-swap-gate
+
+# Firewall #1, fail-closed: block any newly-ADDED file that uses the FROM toolchain of an active swap
+# ADR (governance/adr/*.json) — e.g. a new .nix while ADR-0001 migrates the estate Nix→Guix. Blocks
+# only added files, so maintenance of existing .nix during the parity phase is untouched. The governed
+# escape hatch is a `waivers` entry in the ADR. Make this a REQUIRED status check to actually enforce.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  adr-swap-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Firewall #1 — no new FROM-toolchain file under an active swap
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          echo "Added files vs base $BASE:"
+          git diff --name-only --diff-filter=A "$BASE"...HEAD | sed 's/^/  + /' || true
+          git diff --name-only --diff-filter=A "$BASE"...HEAD \
+            | xargs -r python3 scripts/adr_swap_gate.py

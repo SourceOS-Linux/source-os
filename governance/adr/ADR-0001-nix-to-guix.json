@@ -1,0 +1,19 @@
+{
+  "adr_id": "ADR-0001-nix-to-guix",
+  "title": "Migrate source-os / the Nix estate to Guix (+nonguix)",
+  "kind": "swap",
+  "decided_at": "2026-08-02",
+  "decided_by": "michael",
+  "rationale": "Nix project-governance instability; Guix+nonguix keeps the same nonfree posture with a Scheme-native design. Tool/language/ecosystem/governance change, not a freedom-posture change.",
+  "from": {"lang": "nix", "globs": ["*.nix"], "markers": ["flake.nix", "default.nix"]},
+  "to": {"lang": "guix", "globs": ["*.scm"], "markers": ["channels.scm", "guix.scm", "manifest.scm"]},
+  "scope": [],
+  "scope_note": "empty scope = the whole repo is under the swap",
+  "parity_doc": "guix/NIX_BASELINE.md",
+  "status": "parity",
+  "phases": ["spike", "parity", "cutover", "done"],
+  "waivers": [],
+  "policy": {"new_from": "forbid", "new_from_reason": "no new Nix while the estate migrates to Guix; the gate blocks only newly-ADDED .nix, not maintenance of existing ones"},
+  "gate": "scripts/adr_swap_gate.py (Firewall #1, CI-required); flip status to 'cutover' then 'done' to relax",
+  "provenance": "source-os#314 (guix/channels.scm + guix/system/workstation.scm) + #315 (desktop.scm + guix/NIX_BASELINE.md), MERGED 2026-08-02. As of 2026-08-04: 63 .nix vs 3 .scm on main — parity phase."
+}
