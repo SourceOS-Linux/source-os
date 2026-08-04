@@ -278,6 +278,111 @@ pub fn enroll_device(
     EnrollOutcome { enrolled: reasons.is_empty(), reasons, payload_hash }
 }
 
+// ── Macro-quorum over the k3s master triad: Lazerus-style BLS quorum_sigs ────────────────────
+//
+// The "k3 regime" is the real k8s control plane — three k3s HA masters, each head of one cluster.
+// Each master publishes a Lazerus Integrity Receipt carrying an aggregatable BLS quorum
+// (`quorum_sigs`) over the state_root it commits to. This is the on-device SHAPE + threshold
+// verifier for that macro-quorum — the BLS twin of `verify_quorum` (which is the Ed25519 side).
+// It checks: the rule parses, enough distinct masters are listed, each `quorum_sig` is a
+// well-formed `bls:` token by a listed master, the threshold is met, and (when a state_root is
+// given to bind against) the quorum signs exactly that state — so a macro-quorum vote is bound to
+// the state being failed-back-to, never replayable onto another.
+//
+// The cryptographic pairing check — e(sig, G2) == e(H(state_root), aggregated_pk) — is the next
+// step and is DELIBERATELY DEFERRED: it is blocked on pinning the Lazerus BLS ciphersuite (curve
+// side G1/G2 + the hash-to-curve DST). Implementing a "real" verifier before that suite is fixed
+// would be an unfalsifiable guess that cannot be shown to interoperate — worse than an honest
+// shape gate. This is the exact layering already in this file: `verify_quorum` (shape/threshold)
+// shipped before `verify_quorum_signed` (Ed25519 crypto). Pure Rust, no new deps → the identical
+// logic runs on aarch64 / x86_64 / riscv64, the way an on-device control-plane check must.
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlsSignature {
+    pub master: String, // the signing k3s master identity (DID)
+    pub sig: String,    // "bls:<96 or 192 hex>" — a BLS12-381 G1/G2 signature token
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BlsQuorumProof {
+    pub rule: String,               // "MofN-kind", e.g. "2of3-master"
+    pub masters: Vec<String>,       // the k3s master identities eligible to sign
+    pub state_root: String,         // "sha256:<64hex>" — the state the quorum commits to
+    pub signatures: Vec<BlsSignature>,
+}
+
+/// A `bls:` signature token: `bls:` + 96 hex (G1, 48 bytes) or 192 hex (G2, 96 bytes). Matches the
+/// consumer-side grammar (sociosphere automation/lazerus.py RE_BLS_SIG) so the two ends agree.
+fn is_bls_sig(s: &str) -> bool {
+    if let Some(hexpart) = s.strip_prefix("bls:") {
+        (hexpart.len() == 96 || hexpart.len() == 192)
+            && hexpart.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    } else {
+        false
+    }
+}
+
+/// Verify a BLS macro-quorum proof: shape + M-of-N threshold + optional state binding, fail-closed.
+/// When `bind_state_root` is `Some`, the proof must commit to exactly that state (binds the
+/// macro-quorum to the state being failed back to). Cryptographic aggregate verification is the
+/// deferred next step (see the section note) — this establishes the verifiable shape it will sit on.
+pub fn verify_bls_quorum(proof: &BlsQuorumProof, bind_state_root: Option<&str>) -> QuorumOutcome {
+    let mut reasons: Vec<String> = Vec::new();
+
+    let (threshold, total, _kind) = match parse_rule(&proof.rule) {
+        Some(r) => r,
+        None => {
+            return QuorumOutcome {
+                ok: false,
+                reasons: vec![format!("rule '{}' does not parse as MofN-kind (1<=M<=N)", proof.rule)],
+            }
+        }
+    };
+
+    let mset: BTreeSet<&str> = proof.masters.iter().map(String::as_str).collect();
+    if mset.len() != proof.masters.len() {
+        reasons.push("masters list has duplicates".into());
+    }
+    if mset.len() < total {
+        reasons.push(format!("rule needs {} masters; only {} listed", total, mset.len()));
+    }
+
+    if !is_payload_hash(&proof.state_root) {
+        reasons.push("state_root must be sha256:<64hex>".into());
+    } else if let Some(want) = bind_state_root {
+        if proof.state_root != want {
+            reasons.push("state_root does not match the state being admitted (quorum unbound)".into());
+        }
+    }
+
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut valid = 0usize;
+    for (i, s) in proof.signatures.iter().enumerate() {
+        if !mset.contains(s.master.as_str()) {
+            reasons.push(format!("signature[{i}] master '{}' is not a listed master", s.master));
+            continue;
+        }
+        if seen.contains(s.master.as_str()) {
+            reasons.push(format!("signature[{i}] duplicate master '{}'", s.master));
+            continue;
+        }
+        if !is_bls_sig(&s.sig) {
+            reasons.push(format!("signature[{i}] '{}' is not a bls: token", s.sig));
+            continue;
+        }
+        seen.insert(s.master.as_str());
+        valid += 1;
+    }
+    if valid < threshold {
+        reasons.push(format!(
+            "{valid} valid distinct BLS signature(s) < threshold {threshold} (rule {})",
+            proof.rule
+        ));
+    }
+
+    QuorumOutcome { ok: reasons.is_empty(), reasons }
+}
+
 pub fn aggregate(votes: &[Vote]) -> Option<String> {
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
     for vote in votes {
@@ -507,5 +612,68 @@ mod tests {
         let (q, keys) = quorum_over(&other);
         let o = enroll_device("urn:srcos:device:d1", &b, &boot_policy(), &q, &keys);
         assert!(!o.enrolled && o.reasons.iter().any(|r| r.starts_with("quorum:")));
+    }
+
+    // ── BLS macro-quorum over the k3s master triad ──────────────────────────────────────────
+    const SR: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    fn bsig(master: &str) -> BlsSignature {
+        BlsSignature { master: master.into(), sig: format!("bls:{}", "c".repeat(96)) }
+    }
+    fn triad_proof() -> BlsQuorumProof {
+        BlsQuorumProof {
+            rule: "2of3-master".into(),
+            masters: vec!["did:web:m-a".into(), "did:web:m-b".into(), "did:web:m-c".into()],
+            state_root: SR.into(),
+            signatures: vec![bsig("did:web:m-a"), bsig("did:web:m-b")],
+        }
+    }
+
+    #[test]
+    fn bls_two_of_three_masters_pass() {
+        assert!(verify_bls_quorum(&triad_proof(), Some(SR)).ok);
+    }
+
+    #[test]
+    fn bls_below_threshold_fails() {
+        let mut p = triad_proof();
+        p.signatures.truncate(1); // only 1 of 3 signed
+        assert!(!verify_bls_quorum(&p, Some(SR)).ok);
+    }
+
+    #[test]
+    fn bls_unbound_quorum_rejected() {
+        let other = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let o = verify_bls_quorum(&triad_proof(), Some(other));
+        assert!(!o.ok && o.reasons.iter().any(|r| r.contains("unbound")));
+    }
+
+    #[test]
+    fn bls_unlisted_master_does_not_count() {
+        let mut p = triad_proof();
+        p.signatures[1] = bsig("did:web:INTRUDER");
+        // only 1 listed master signed → below threshold 2
+        assert!(!verify_bls_quorum(&p, Some(SR)).ok);
+    }
+
+    #[test]
+    fn bls_duplicate_master_counts_once() {
+        let mut p = triad_proof();
+        p.signatures[1] = bsig("did:web:m-a"); // same master twice
+        let o = verify_bls_quorum(&p, Some(SR));
+        assert!(!o.ok && o.reasons.iter().any(|r| r.contains("duplicate")));
+    }
+
+    #[test]
+    fn bls_malformed_sig_token_rejected() {
+        let mut p = triad_proof();
+        p.signatures[1].sig = "bls:notvalidhex".into();
+        assert!(!verify_bls_quorum(&p, Some(SR)).ok);
+    }
+
+    #[test]
+    fn bls_bad_state_root_rejected() {
+        let mut p = triad_proof();
+        p.state_root = "sha256:short".into();
+        assert!(!verify_bls_quorum(&p, None).ok);
     }
 }
