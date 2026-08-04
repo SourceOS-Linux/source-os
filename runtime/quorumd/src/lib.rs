@@ -1,9 +1,127 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Vote {
     pub signer: String,
     pub verdict: String,
+}
+
+// ── Canonical validator-quorum verifier (the on-device + CLI verifier) ──────────────────────
+//
+// Conforms to the authoritative QuorumProof shape (mcp-a2a-zero-trust ::
+// schemas/canonical/quorum_proof.schema.json). This is the SAME contract the prophet-platform
+// Python verifier (PP #1370) checks; the two are twins over one shape, not two schemas.
+//
+// Pure Rust, no arch-specific code — the identical binary logic runs on aarch64 (Apple Silicon),
+// x86_64, and riscv64. This is why it lives at L0 in Rust and not in the cloud runtime: the
+// canon runs this check IN the boot path (bootProbe halts on a failed Genesis quorum), before
+// any network exists — a device decides its own trust locally, on whatever silicon it is.
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuorumSignature {
+    pub kind: String,
+    pub spiffe_id: String,
+    pub sig: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QuorumProof {
+    pub rule: String,
+    pub validators: Vec<String>,
+    pub signed_payload_hash: String,
+    pub signatures: Vec<QuorumSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuorumOutcome {
+    pub ok: bool,
+    pub reasons: Vec<String>,
+}
+
+/// Parse a `MofN-kind` rule (e.g. "2of3-human"). Returns None on M<1, N<1, or M>N.
+fn parse_rule(rule: &str) -> Option<(usize, usize, &str)> {
+    let (m_n, kind) = rule.split_once('-')?;
+    let (m, n) = m_n.split_once("of")?;
+    let threshold: usize = m.parse().ok()?;
+    let total: usize = n.parse().ok()?;
+    if threshold < 1 || total < 1 || threshold > total {
+        return None;
+    }
+    Some((threshold, total, kind))
+}
+
+fn is_payload_hash(s: &str) -> bool {
+    s.len() == 7 + 64
+        && s.starts_with("sha256:")
+        && s[7..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Verify a QuorumProof: shape + M-of-N threshold, fail-closed. When `payload_hash` is given the
+/// proof must be over exactly that payload (binds the quorum to the thing being admitted).
+///
+/// NOTE (v1): this checks that `threshold` DISTINCT listed validators each supplied a non-trivial
+/// signature. Cryptographic verification of each `sig` against the validator's FIDO2/NitroKey
+/// public key is the next step; the shape and threshold arithmetic are canonical here.
+pub fn verify_quorum(proof: &QuorumProof, payload_hash: Option<&str>) -> QuorumOutcome {
+    let mut reasons: Vec<String> = Vec::new();
+
+    let (threshold, total, kind) = match parse_rule(&proof.rule) {
+        Some(r) => r,
+        None => {
+            return QuorumOutcome {
+                ok: false,
+                reasons: vec![format!("rule '{}' does not parse as MofN-kind (1<=M<=N)", proof.rule)],
+            }
+        }
+    };
+
+    let vset: BTreeSet<&str> = proof.validators.iter().map(String::as_str).collect();
+    if vset.len() != proof.validators.len() {
+        reasons.push("validators list has duplicates".into());
+    }
+    if vset.len() < total {
+        reasons.push(format!("rule needs {} validators; only {} listed", total, vset.len()));
+    }
+
+    if !is_payload_hash(&proof.signed_payload_hash) {
+        reasons.push("signed_payload_hash must be sha256:<64hex>".into());
+    } else if let Some(ph) = payload_hash {
+        if proof.signed_payload_hash != ph {
+            reasons.push("signed_payload_hash does not match the admitted payload (quorum unbound)".into());
+        }
+    }
+
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut valid = 0usize;
+    for (i, s) in proof.signatures.iter().enumerate() {
+        if s.kind != kind {
+            reasons.push(format!("signature[{i}] kind '{}' != rule kind '{kind}'", s.kind));
+            continue;
+        }
+        if !vset.contains(s.spiffe_id.as_str()) {
+            reasons.push(format!("signature[{i}] signer '{}' is not a listed validator", s.spiffe_id));
+            continue;
+        }
+        if seen.contains(s.spiffe_id.as_str()) {
+            reasons.push(format!("signature[{i}] duplicate signer '{}'", s.spiffe_id));
+            continue;
+        }
+        if s.sig.len() < 16 {
+            reasons.push(format!("signature[{i}] sig too short / missing"));
+            continue;
+        }
+        seen.insert(s.spiffe_id.as_str());
+        valid += 1;
+    }
+    if valid < threshold {
+        reasons.push(format!(
+            "{valid} valid distinct signature(s) < threshold {threshold} (rule {})",
+            proof.rule
+        ));
+    }
+
+    QuorumOutcome { ok: reasons.is_empty(), reasons }
 }
 
 pub fn aggregate(votes: &[Vote]) -> Option<String> {
@@ -29,5 +147,65 @@ mod tests {
             Vote { signer: "watchdog@w1".into(), verdict: "terminate".into() },
         ];
         assert_eq!(aggregate(&votes).as_deref(), Some("reseal_resume"));
+    }
+
+    const PH: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn validators() -> Vec<String> {
+        vec!["spiffe://v/1".into(), "spiffe://v/2".into(), "spiffe://v/3".into()]
+    }
+    fn sig(v: &str) -> QuorumSignature {
+        QuorumSignature { kind: "human".into(), spiffe_id: v.into(), sig: "MEUCIQD".to_string() + &"f".repeat(20) }
+    }
+    fn proof(sigs: Vec<QuorumSignature>) -> QuorumProof {
+        QuorumProof { rule: "2of3-human".into(), validators: validators(), signed_payload_hash: PH.into(), signatures: sigs }
+    }
+
+    #[test]
+    fn valid_two_of_three_passes() {
+        let p = proof(vec![sig("spiffe://v/1"), sig("spiffe://v/2")]);
+        assert!(verify_quorum(&p, Some(PH)).ok);
+    }
+
+    #[test]
+    fn below_threshold_fails() {
+        assert!(!verify_quorum(&proof(vec![sig("spiffe://v/1")]), None).ok);
+    }
+
+    #[test]
+    fn non_validator_signer_fails() {
+        let p = proof(vec![sig("spiffe://v/1"), sig("spiffe://intruder")]);
+        let o = verify_quorum(&p, None);
+        assert!(!o.ok && o.reasons.iter().any(|r| r.contains("not a listed validator")));
+    }
+
+    #[test]
+    fn duplicate_signer_not_counted_twice() {
+        let p = proof(vec![sig("spiffe://v/1"), sig("spiffe://v/1")]);
+        let o = verify_quorum(&p, None);
+        assert!(!o.ok && o.reasons.iter().any(|r| r.contains("duplicate")));
+    }
+
+    #[test]
+    fn payload_hash_binding_enforced() {
+        let other = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let o = verify_quorum(&proof(vec![sig("spiffe://v/1"), sig("spiffe://v/2")]), Some(other));
+        assert!(!o.ok && o.reasons.iter().any(|r| r.contains("does not match")));
+    }
+
+    #[test]
+    fn malformed_rule_fails() {
+        let mut p = proof(vec![sig("spiffe://v/1"), sig("spiffe://v/2")]);
+        p.rule = "4of3-human".into();
+        assert!(!verify_quorum(&p, None).ok);
+    }
+
+    #[test]
+    fn kind_mismatch_fails() {
+        let p = proof(vec![
+            QuorumSignature { kind: "machine".into(), spiffe_id: "spiffe://v/1".into(), sig: "x".repeat(20) },
+            QuorumSignature { kind: "machine".into(), spiffe_id: "spiffe://v/2".into(), sig: "x".repeat(20) },
+        ]);
+        assert!(!verify_quorum(&p, None).ok);
     }
 }
