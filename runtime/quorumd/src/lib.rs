@@ -207,6 +207,77 @@ pub fn verify_quorum_signed(
     QuorumOutcome { ok: reasons.is_empty(), reasons }
 }
 
+// ── Device enrollment gate — the fusion (attested boot × cryptographic quorum) ──────────────
+//
+// A device joins the fleet only if BOTH hold: its boot ATTESTS (the measured chain matches the
+// pinned golden policy, watchdog_validator::attest_boot) AND a validator quorum CRYPTOGRAPHICALLY
+// co-signs THIS enrollment (verify_quorum_signed, bound to a payload hash over the device + its
+// attested boot). Neither alone is enough: an attested boot with no quorum is a device nobody
+// vouched for; a quorum with no attestation vouches for an unmeasured box. This is the canon's
+// Genesis binding, complete — and it runs on-device, on any silicon, in pure Rust.
+
+use sha2::{Digest, Sha256};
+use watchdog_validator::attestation::{attest_boot, AttestationPolicy, BootProofRecord};
+
+/// The payload the validators must co-sign: binds the device to the EXACT boot that was measured,
+/// so a quorum vote is valid for this device + this boot only (not replayable elsewhere).
+pub fn enrollment_payload_hash(device_ref: &str, boot: &BootProofRecord) -> String {
+    let mut h = Sha256::new();
+    h.update(device_ref.as_bytes());
+    h.update(b"|outcome=");
+    h.update(boot.outcome.as_bytes());
+    // ordered (stage, hash) pairs — the measured chain identity.
+    let mut stages: Vec<(&str, &str)> = boot
+        .stage_proofs
+        .iter()
+        .map(|s| (s.stage_name.as_str(), s.content_hash.as_str()))
+        .collect();
+    stages.sort();
+    for (name, hash) in stages {
+        h.update(b"|");
+        h.update(name.as_bytes());
+        h.update(b"=");
+        h.update(hash.as_bytes());
+    }
+    format!("sha256:{}", hex::encode(h.finalize()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnrollOutcome {
+    pub enrolled: bool,
+    pub reasons: Vec<String>,
+    pub payload_hash: String,
+}
+
+/// Enroll a device iff its boot attests AND a cryptographic validator quorum co-signs the
+/// enrollment payload. Fail-closed: either check failing blocks enrollment.
+pub fn enroll_device(
+    device_ref: &str,
+    boot: &BootProofRecord,
+    policy: &AttestationPolicy,
+    quorum: &QuorumProof,
+    keys: &ValidatorKeys,
+) -> EnrollOutcome {
+    let mut reasons: Vec<String> = Vec::new();
+
+    let att = attest_boot(boot, policy);
+    if !att.attested {
+        for r in &att.reasons {
+            reasons.push(format!("attestation: {r}"));
+        }
+    }
+
+    let payload_hash = enrollment_payload_hash(device_ref, boot);
+    let q = verify_quorum_signed(quorum, Some(&payload_hash), keys);
+    if !q.ok {
+        for r in &q.reasons {
+            reasons.push(format!("quorum: {r}"));
+        }
+    }
+
+    EnrollOutcome { enrolled: reasons.is_empty(), reasons, payload_hash }
+}
+
 pub fn aggregate(votes: &[Vote]) -> Option<String> {
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
     for vote in votes {
@@ -360,5 +431,81 @@ mod tests {
         let p = proof(vec![real_sig(&sk1, "spiffe://v/1", PH), real_sig(&sk2, "spiffe://v/2", PH)]);
         let o = verify_quorum_signed(&p, Some(PH), &keys);
         assert!(!o.ok && o.reasons.iter().any(|r| r.contains("no registered key")));
+    }
+
+    // ── device enrollment fusion (attested boot × cryptographic quorum) ────────────────────
+    use watchdog_validator::attestation::{AttestationPolicy, BootProofRecord, StagePin, StageProof};
+
+    fn vroot() -> String {
+        format!("sha256:{}", "d".repeat(64))
+    }
+
+    fn boot(outcome: &str) -> BootProofRecord {
+        let stage = |n: &str, h: String| StageProof {
+            stage_name: n.into(), content_hash: h, verdict: "verified".into(), artifact_ref: String::new(),
+        };
+        BootProofRecord {
+            outcome: outcome.into(),
+            device_ref: "urn:srcos:device:d1".into(),
+            boot_plan_ref: "p".into(),
+            stage_proofs: vec![
+                stage("firmware", format!("sha256:{}", "1".repeat(64))),
+                stage("rootfs", vroot()),
+            ],
+            signature: None,
+        }
+    }
+    fn boot_policy() -> AttestationPolicy {
+        let b = boot("success");
+        AttestationPolicy {
+            expected_stages: b.stage_proofs.iter().map(|s| StagePin { stage_name: s.stage_name.clone(), content_hash: s.content_hash.clone() }).collect(),
+            rootfs_stage: Some("rootfs".into()),
+            rootfs_verity_root: Some(vroot()),
+            require_signature: false,
+        }
+    }
+    // a real 2-of-3 quorum signing the given enrollment payload hash.
+    fn quorum_over(payload_hash: &str) -> (QuorumProof, ValidatorKeys) {
+        let (sk1, pk1) = keypair(1);
+        let (sk2, pk2) = keypair(2);
+        let mut keys = ValidatorKeys::new();
+        keys.insert("spiffe://v/1".into(), pk1);
+        keys.insert("spiffe://v/2".into(), pk2);
+        keys.insert("spiffe://v/3".into(), keypair(3).1);
+        let p = QuorumProof {
+            rule: "2of3-human".into(),
+            validators: validators(),
+            signed_payload_hash: payload_hash.into(),
+            signatures: vec![real_sig(&sk1, "spiffe://v/1", payload_hash), real_sig(&sk2, "spiffe://v/2", payload_hash)],
+        };
+        (p, keys)
+    }
+
+    #[test]
+    fn enroll_requires_both_attestation_and_quorum() {
+        let b = boot("success");
+        let ph = enrollment_payload_hash("urn:srcos:device:d1", &b);
+        let (q, keys) = quorum_over(&ph);
+        let o = enroll_device("urn:srcos:device:d1", &b, &boot_policy(), &q, &keys);
+        assert!(o.enrolled, "{:?}", o.reasons);
+    }
+
+    #[test]
+    fn enroll_rejects_unattested_boot_even_with_valid_quorum() {
+        let b = boot("failure"); // boot did not succeed → attestation fails
+        let ph = enrollment_payload_hash("urn:srcos:device:d1", &b);
+        let (q, keys) = quorum_over(&ph);
+        let o = enroll_device("urn:srcos:device:d1", &b, &boot_policy(), &q, &keys);
+        assert!(!o.enrolled && o.reasons.iter().any(|r| r.starts_with("attestation:")));
+    }
+
+    #[test]
+    fn enroll_rejects_quorum_bound_to_a_different_device() {
+        // a valid quorum, but signed over ANOTHER device's payload — must not enroll this one.
+        let b = boot("success");
+        let other = enrollment_payload_hash("urn:srcos:device:OTHER", &b);
+        let (q, keys) = quorum_over(&other);
+        let o = enroll_device("urn:srcos:device:d1", &b, &boot_policy(), &q, &keys);
+        assert!(!o.enrolled && o.reasons.iter().any(|r| r.starts_with("quorum:")));
     }
 }
